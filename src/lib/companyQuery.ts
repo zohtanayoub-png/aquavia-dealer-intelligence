@@ -52,6 +52,57 @@ const ORDER_BY: Record<string, (dir: Prisma.SortOrder) => Prisma.CompanyOrderByW
 
 export const SORTABLE_FIELDS = Object.keys(ORDER_BY);
 
+/**
+ * Columns that may legally carry the `{ sort, nulls }` object form.
+ * Derived from the schema: only nullable columns qualify.
+ */
+export const NULLABLE_SORT_COLUMNS: ReadonlySet<string> = new Set([
+  'city',
+  'googleRating',
+  'googleReviewCount',
+]);
+
+/**
+ * Last line of defence before an orderBy reaches Prisma.
+ *
+ * Sending `{ sort, nulls }` for a non-nullable column is a hard runtime error
+ * that takes the whole Companies page down:
+ *
+ *   Argument `score`: Invalid value provided. Expected SortOrder, provided Object.
+ *
+ * `buildOrderBy` cannot produce that shape any more, but this guard makes the
+ * failure mode unreachable for EVERY caller — including future ones and any
+ * hand-written orderBy — by coercing the object form back to a bare SortOrder
+ * on columns that cannot accept it. It logs loudly rather than failing
+ * silently, so the underlying mistake still gets found and fixed.
+ */
+export function sanitizeOrderBy(
+  orderBy: Prisma.CompanyOrderByWithRelationInput[],
+): Prisma.CompanyOrderByWithRelationInput[] {
+  return orderBy.map((term) => {
+    const safe: Record<string, unknown> = {};
+
+    for (const [column, value] of Object.entries(term)) {
+      const isObjectForm =
+        typeof value === 'object' && value !== null && 'sort' in (value as object);
+
+      if (isObjectForm && !NULLABLE_SORT_COLUMNS.has(column)) {
+        const { sort } = value as { sort: Prisma.SortOrder };
+        console.error(
+          `[companyQuery] Refusing to send { sort, nulls } for non-nullable column "${column}" — ` +
+            `Prisma expects a bare SortOrder here. Coerced to "${sort}". ` +
+            'This indicates an orderBy built outside buildOrderBy(); fix the caller.',
+        );
+        safe[column] = sort;
+        continue;
+      }
+      safe[column] = value;
+    }
+
+    return safe as Prisma.CompanyOrderByWithRelationInput;
+  });
+}
+
 /** Default sort: highest opportunity score first. */
 export const DEFAULT_SORT_FIELD = 'score';
 
@@ -167,5 +218,8 @@ export function buildOrderBy(f: CompanyFilters): Prisma.CompanyOrderByWithRelati
 
   // Company name is the tie-breaker, except when it IS the primary sort —
   // repeating it there would emit a contradictory second ORDER BY term.
-  return field === 'name' ? [primary] : [primary, { name: 'asc' }];
+  const orderBy: Prisma.CompanyOrderByWithRelationInput[] =
+    field === 'name' ? [primary] : [primary, { name: 'asc' }];
+
+  return sanitizeOrderBy(orderBy);
 }

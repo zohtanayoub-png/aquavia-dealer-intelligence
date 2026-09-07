@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  buildOrderBy, buildWhere, parseFilters, SORTABLE_FIELDS, DEFAULT_SORT_FIELD,
+  buildOrderBy, buildWhere, parseFilters, sanitizeOrderBy,
+  SORTABLE_FIELDS, DEFAULT_SORT_FIELD, NULLABLE_SORT_COLUMNS,
 } from '@/lib/companyQuery';
 
 /**
@@ -174,5 +175,67 @@ describe('buildWhere — enum values from the query string', () => {
   it('excludes excluded companies unless explicitly asked', () => {
     expect(JSON.stringify(buildWhere(parseFilters(new URLSearchParams(''))))).toContain('"isExcluded":false');
     expect(JSON.stringify(buildWhere(parseFilters(new URLSearchParams('includeExcluded=true'))))).not.toContain('isExcluded');
+  });
+});
+
+describe('sanitizeOrderBy — defence in depth for callers outside buildOrderBy', () => {
+  it('coerces the exact orderBy production reported into a valid one', () => {
+    const reportedByProduction = [
+      { score: { sort: 'desc', nulls: 'last' } },
+      { name: 'asc' },
+    ] as unknown as Parameters<typeof sanitizeOrderBy>[0];
+
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (msg: string) => errors.push(String(msg));
+    try {
+      expect(sanitizeOrderBy(reportedByProduction)).toEqual([
+        { score: 'desc' },
+        { name: 'asc' },
+      ]);
+    } finally {
+      console.error = original;
+    }
+
+    // It must not fail silently — the underlying caller still needs fixing.
+    expect(errors.join(' ')).toContain('score');
+  });
+
+  it('strips the object form from every non-nullable column', () => {
+    const hostile = SORTABLE_FIELDS
+      .filter((f) => !NULLABLE_SORT_COLUMNS.has(f))
+      .map((f) => ({ [f]: { sort: 'desc', nulls: 'last' } })) as unknown as Parameters<typeof sanitizeOrderBy>[0];
+
+    const original = console.error;
+    console.error = () => {};
+    try {
+      for (const term of sanitizeOrderBy(hostile)) {
+        for (const value of Object.values(term)) expect(typeof value).toBe('string');
+      }
+    } finally {
+      console.error = original;
+    }
+  });
+
+  it('leaves valid object-form ordering on nullable columns untouched', () => {
+    const valid = [{ googleRating: { sort: 'desc', nulls: 'last' } }] as unknown as Parameters<typeof sanitizeOrderBy>[0];
+    expect(sanitizeOrderBy(valid)).toEqual([{ googleRating: { sort: 'desc', nulls: 'last' } }]);
+  });
+
+  it('leaves bare SortOrder ordering untouched', () => {
+    expect(sanitizeOrderBy([{ score: 'desc' }, { name: 'asc' }])).toEqual([
+      { score: 'desc' },
+      { name: 'asc' },
+    ]);
+  });
+
+  it('agrees with the schema about which columns may use the object form', () => {
+    for (const column of NULLABLE_SORT_COLUMNS) {
+      expect(NULLABILITY.get(column), `${column} must be nullable in the schema`).toBe(true);
+    }
+    for (const field of SORTABLE_FIELDS) {
+      if (NULLABLE_SORT_COLUMNS.has(field)) continue;
+      expect(NULLABILITY.get(field), `${field} must be non-nullable in the schema`).toBe(false);
+    }
   });
 });
