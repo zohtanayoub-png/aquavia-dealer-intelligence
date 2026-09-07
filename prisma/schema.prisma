@@ -1,0 +1,408 @@
+// AQUAVIA DEALER INTELLIGENCE — data model
+//
+// DATA QUALITY CONTRACT
+// ---------------------
+// Every fact in this schema is either:
+//   (a) VERIFIED  — it came from a provider response or a page we actually read,
+//                   and it carries at least one SourceRef; or
+//   (b) UNKNOWN   — represented as NULL (scalars) or Tristate.UNKNOWN (booleans).
+// There is no third state. Nothing is inferred into a verified field.
+// Anything the system reasons about rather than observes lives in a *Basis /
+// *Confidence column so it can never be mistaken for an observation.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// Three-valued logic. UNKNOWN is a first-class, correct answer.
+enum Tristate {
+  YES
+  NO
+  UNKNOWN
+}
+
+enum Confidence {
+  HIGH
+  MEDIUM
+  LOW
+  UNKNOWN
+}
+
+enum Priority {
+  A // 80-100 HIGH PRIORITY
+  B // 60-79  GOOD PROSPECT
+  C // 40-59  SECONDARY
+  D // 0-39   LOW PRIORITY
+}
+
+enum CrmStatus {
+  NEW
+  TO_CONTACT
+  CONTACTED
+  REPLIED
+  MEETING
+  QUALIFIED
+  NEGOTIATING
+  DEALER
+  NOT_INTERESTED
+  DO_NOT_CONTACT
+}
+
+enum NextAction {
+  VISIT
+  CALL
+  EMAIL
+  LINKEDIN
+  QUALIFY_FIRST
+  LOW_PRIORITY
+}
+
+enum SearchDepth {
+  QUICK
+  DEEP
+}
+
+enum RunStatus {
+  PENDING
+  DISCOVERING
+  ENRICHING
+  SCORING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ExclusionKind {
+  EXISTING_DEALER
+  ACTIVE_NEGOTIATION
+  DO_NOT_CONTACT
+  KNOWN_COMPETITOR
+}
+
+/// What kind of claim a source URL underpins. Keeps evidence attributable.
+enum EvidenceKind {
+  DISCOVERY
+  IDENTITY
+  CONTACT
+  SPA_ACTIVITY
+  POOL_ACTIVITY
+  SAUNA_ACTIVITY
+  WELLNESS_ACTIVITY
+  SHOWROOM
+  BRAND
+  COMPETITOR_BRAND
+  YEAR_FOUNDED
+  SPA_SINCE
+  DECISION_MAKER
+  SOCIAL
+  LOCATIONS
+  HOSPITALITY
+  OTHER
+}
+
+enum ProviderName {
+  GOOGLE_PLACES
+  TAVILY
+  ANTHROPIC
+  MANUAL
+}
+
+// ---------------------------------------------------------------------------
+// Company — the prospect record
+// ---------------------------------------------------------------------------
+
+model Company {
+  id String @id @default(cuid())
+
+  // --- Identity -------------------------------------------------------------
+  name          String
+  legalName     String?
+  /// Normalised key used for de-duplication across runs and providers.
+  dedupeKey     String  @unique
+
+  // --- Location -------------------------------------------------------------
+  /// ISO 3166-1 alpha-2, uppercase.
+  countryCode   String
+  countryName   String
+  region        String?
+  city          String?
+  fullAddress   String?
+  postalCode    String?
+  latitude      Float?
+  longitude     Float?
+
+  // --- Google Places (New) --------------------------------------------------
+  googlePlaceId      String? @unique
+  googleRating       Float?
+  googleReviewCount  Int?
+  googleTypes        String[] @default([])
+  googleMapsUri      String?
+  /// Google's own business status, e.g. OPERATIONAL / CLOSED_TEMPORARILY.
+  googleBusinessStatus String?
+
+  // --- Contact --------------------------------------------------------------
+  website       String?
+  /// Registrable domain of `website`, used for de-duplication and contact matching.
+  websiteDomain String?
+  phone         String?
+  publicEmail   String?
+  whatsapp      String?
+
+  // --- Social ---------------------------------------------------------------
+  linkedinUrl   String?
+  instagramUrl  String?
+  facebookUrl   String?
+  youtubeUrl    String?
+
+  // --- Activities (Tristate: never guessed) --------------------------------
+  spaActivity       Tristate @default(UNKNOWN)
+  poolActivity      Tristate @default(UNKNOWN)
+  saunaActivity     Tristate @default(UNKNOWN)
+  wellnessActivity  Tristate @default(UNKNOWN)
+  hammamActivity    Tristate @default(UNKNOWN)
+  outdoorLiving     Tristate @default(UNKNOWN)
+  /// Sells to hotels / spas / commercial wellness projects.
+  hospitalityActivity Tristate @default(UNKNOWN)
+  showroom          Tristate @default(UNKNOWN)
+
+  // --- Company age ----------------------------------------------------------
+  // These two are deliberately SEPARATE and must never be conflated.
+  /// The year the COMPANY was founded (any line of business).
+  yearFounded          Int?
+  yearFoundedConfidence Confidence @default(UNKNOWN)
+  /// The year the company started working WITH SPAS / HOT TUBS specifically.
+  spaSinceYear         Int?
+  spaSinceConfidence   Confidence @default(UNKNOWN)
+  /// Years working in the spa industry. Derived from spaSinceYear ONLY.
+  /// NULL whenever spaSinceYear is unknown — it is never back-filled from yearFounded.
+  yearsInSpaIndustry   Int?
+
+  // --- Commercial footprint -------------------------------------------------
+  /// Number of physical locations, when verifiable.
+  locationCount Int?
+  /// Brands the company represents (verified mentions only).
+  brands           String[] @default([])
+  /// Subset of `brands` recognised as competing spa/hot-tub manufacturers.
+  competitorBrands String[] @default([])
+  /// True when the company was found to already represent Aquavia.
+  representsAquavia Tristate @default(UNKNOWN)
+
+  // --- Scoring --------------------------------------------------------------
+  score            Int        @default(0)
+  priority         Priority   @default(D)
+  /// Per-signal breakdown of the score, for full auditability in the UI.
+  scoreBreakdown   Json?
+  whyThisCompany   String?
+  recommendedAction NextAction @default(QUALIFY_FIRST)
+  /// Overall record confidence, driven by how much was actually verified.
+  confidence       Confidence @default(UNKNOWN)
+  /// 0-100: share of scoring signals that rest on verified data.
+  dataCompleteness Int        @default(0)
+
+  // --- CRM ------------------------------------------------------------------
+  crmStatus     CrmStatus @default(NEW)
+  salesNotes    String?
+  lastContactAt DateTime?
+  nextFollowUpAt DateTime?
+  ownerName     String?
+
+  // --- Exclusion flags ------------------------------------------------------
+  isExcluded     Boolean        @default(false)
+  exclusionKind  ExclusionKind?
+  exclusionNote  String?
+
+  // --- Research -------------------------------------------------------------
+  researchNotes String?
+  /// Set when enrichment could not run (e.g. TAVILY_API_KEY missing).
+  enrichmentStatus String?
+
+  // --- Provenance -----------------------------------------------------------
+  discoveredAt   DateTime  @default(now())
+  lastVerifiedAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  decisionMakers DecisionMaker[]
+  sources        SourceRef[]
+  runLinks       SearchRunCompany[]
+
+  @@index([countryCode, city])
+  @@index([priority, score])
+  @@index([crmStatus])
+  @@index([isExcluded])
+  @@index([websiteDomain])
+}
+
+// ---------------------------------------------------------------------------
+// Decision makers — public professional information ONLY
+// ---------------------------------------------------------------------------
+
+model DecisionMaker {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  fullName  String
+  position  String?
+  /// Normalised role bucket (OWNER, CEO, SALES_DIRECTOR, ...).
+  roleBucket String?
+
+  /// Public LinkedIn profile URL as published. We never authenticate against,
+  /// scrape behind, or otherwise bypass LinkedIn's access controls.
+  linkedinUrl String?
+  /// Publicly published professional email. NEVER pattern-guessed or constructed.
+  email       String?
+  phone       String?
+
+  sourceUrl  String?
+  sourceNote String?
+  confidence Confidence @default(UNKNOWN)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, fullName])
+  @@index([companyId])
+}
+
+// ---------------------------------------------------------------------------
+// Evidence
+// ---------------------------------------------------------------------------
+
+model SourceRef {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  url      String
+  title    String?
+  /// Verbatim snippet that supports the claim. Never paraphrased into a fact.
+  snippet  String?
+  kind     EvidenceKind @default(OTHER)
+  provider ProviderName @default(TAVILY)
+
+  retrievedAt DateTime @default(now())
+
+  @@unique([companyId, url, kind])
+  @@index([companyId])
+}
+
+// ---------------------------------------------------------------------------
+// Search runs — chunked so they fit inside serverless execution limits
+// ---------------------------------------------------------------------------
+
+model SearchRun {
+  id String @id @default(cuid())
+
+  countryCode String
+  countryName String
+  city        String?
+  depth       SearchDepth @default(QUICK)
+  status      RunStatus   @default(PENDING)
+
+  /// The localized query plan generated for this market, stored for audit.
+  queryPlan Json?
+  /// Index of the next query to execute — drives chunked processing.
+  cursor    Int  @default(0)
+  /// Total number of queries in the plan.
+  totalSteps Int @default(0)
+
+  discoveredCount Int @default(0)
+  newCount        Int @default(0)
+  updatedCount    Int @default(0)
+  enrichedCount   Int @default(0)
+  excludedCount   Int @default(0)
+
+  /// Human-readable warnings, e.g. "TAVILY_API_KEY not configured".
+  warnings String[] @default([])
+  error    String?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  logs     SearchRunLog[]
+  companies SearchRunCompany[]
+
+  @@index([countryCode])
+  @@index([status])
+}
+
+model SearchRunLog {
+  id    String    @id @default(cuid())
+  runId String
+  run   SearchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  level   String   @default("info")
+  message String
+  meta    Json?
+  at      DateTime @default(now())
+
+  @@index([runId, at])
+}
+
+/// Join table: which companies a given run touched, and whether they were new.
+model SearchRunCompany {
+  runId     String
+  companyId String
+  run       SearchRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  isNew     Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@id([runId, companyId])
+  @@index([companyId])
+}
+
+// ---------------------------------------------------------------------------
+// Exclusion lists
+// ---------------------------------------------------------------------------
+
+model ExclusionEntry {
+  id   String        @id @default(cuid())
+  kind ExclusionKind
+
+  /// Company name to match against (normalised on write).
+  name        String
+  nameKey     String
+  /// Optional narrowing criteria.
+  countryCode String?
+  city        String?
+  /// Registrable domain, when known — the strongest matching signal.
+  domain      String?
+  note        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([kind])
+  @@index([nameKey])
+  @@index([domain])
+}
+
+// ---------------------------------------------------------------------------
+// Markets — per-country working notes and targets
+// ---------------------------------------------------------------------------
+
+model Market {
+  id          String  @id @default(cuid())
+  countryCode String  @unique
+  countryName String
+
+  notes       String?
+  targetCount Int?
+  isPriority  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

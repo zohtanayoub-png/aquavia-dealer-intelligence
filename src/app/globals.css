@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-sand-100 text-ink-900 antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'ss01';
+  }
+
+  /* Numbers in a data table must line up. Non-negotiable for scanning. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    @apply bg-aqua-200 text-ink-900;
+  }
+
+  /* A restrained scrollbar keeps dense tables from feeling like a spreadsheet. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-sand-300;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-sand-400;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border border-sand-200 bg-white shadow-card;
+  }
+
+  .card-header {
+    @apply flex items-center justify-between gap-3 border-b border-sand-200 px-4 py-3;
+  }
+
+  .card-title {
+    @apply text-[13px] font-semibold uppercase tracking-[0.08em] text-ink-700;
+  }
+
+  .label {
+    @apply text-2xs font-semibold uppercase tracking-[0.09em] text-sand-400;
+  }
+
+  .field {
+    @apply w-full rounded-md border border-sand-300 bg-white px-3 py-2 text-sm text-ink-900
+           outline-none transition placeholder:text-sand-400
+           focus:border-aqua-500 focus:ring-2 focus:ring-aqua-500/20;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3.5 py-2 text-sm font-medium
+           transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-ink-900 text-white hover:bg-ink-800 active:bg-ink-950;
+  }
+
+  .btn-accent {
+    @apply btn bg-aqua-600 text-white hover:bg-aqua-700 active:bg-aqua-800;
+  }
+
+  .btn-ghost {
+    @apply btn border border-sand-300 bg-white text-ink-800 hover:bg-sand-50 hover:border-sand-400;
+  }
+
+  .btn-sm {
+    @apply px-2.5 py-1.5 text-xs;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide;
+  }
+
+  /* UNKNOWN is a first-class value in this product, so it gets a real style
+     rather than looking like missing data. */
+  .unknown {
+    @apply text-2xs font-medium uppercase tracking-wide text-sand-400;
+  }
+
+  .table-dense th {
+    @apply sticky top-0 z-10 whitespace-nowrap border-b border-sand-200 bg-sand-50 px-3 py-2
+           text-left text-2xs font-semibold uppercase tracking-[0.07em] text-ink-700;
+  }
+
+  .table-dense td {
+    @apply border-b border-sand-200/70 px-3 py-2 align-middle text-[13px];
+  }
+
+  .table-dense tbody tr:hover {
+    @apply bg-aqua-50/50;
+  }
+
+  .skeleton {
+    @apply rounded bg-gradient-to-r from-sand-200 via-sand-100 to-sand-200 bg-[length:1000px_100%] animate-shimmer;
+  }
+}

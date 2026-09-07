@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "prisma generate && prisma migrate deploy && next build",
+  "framework": "nextjs",
+  "functions": {
+    "src/app/api/runs/[id]/step/route.ts": { "maxDuration": 60 },
+    "src/app/api/export/route.ts": { "maxDuration": 60 }
+  }
+}
