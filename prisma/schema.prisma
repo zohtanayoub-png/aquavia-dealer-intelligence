@@ -67,6 +67,33 @@ enum NextAction {
   LOW_PRIORITY
 }
 
+/// Primary business classification. Evidence-based; UNKNOWN is a valid answer.
+enum BusinessClassification {
+  HOT_TUB_SPA_RETAILER
+  POOL_AND_SPA_COMPANY
+  POOL_COMPANY
+  WELLNESS_EQUIPMENT
+  SAUNA_HAMMAM_EQUIPMENT
+  OUTDOOR_LIVING
+  HOTEL_HOSPITALITY_SUPPLIER
+  CONSTRUCTION_LANDSCAPE_RELEVANT
+  MASSAGE_DAY_SPA
+  BEAUTY_AESTHETICS
+  HOTEL_SPA_ONLY
+  HAMMAM_SERVICE_ONLY
+  IRRELEVANT
+  UNKNOWN
+}
+
+/// How commercially relevant this company is as an Aquavia dealer prospect.
+enum CommercialRelevance {
+  HIGHLY_RELEVANT
+  RELEVANT
+  POSSIBLE
+  LOW_RELEVANCE
+  IRRELEVANT
+}
+
 enum SearchDepth {
   QUICK
   DEEP
@@ -107,6 +134,10 @@ enum EvidenceKind {
   SOCIAL
   LOCATIONS
   HOSPITALITY
+  PRODUCT_EVIDENCE
+  DEALER_LOCATOR
+  NEGATIVE_SIGNAL
+  CLASSIFICATION
   OTHER
 }
 
@@ -125,28 +156,28 @@ model Company {
   id String @id @default(cuid())
 
   // --- Identity -------------------------------------------------------------
-  name          String
-  legalName     String?
+  name      String
+  legalName String?
   /// Normalised key used for de-duplication across runs and providers.
-  dedupeKey     String  @unique
+  dedupeKey String  @unique
 
   // --- Location -------------------------------------------------------------
   /// ISO 3166-1 alpha-2, uppercase.
-  countryCode   String
-  countryName   String
-  region        String?
-  city          String?
-  fullAddress   String?
-  postalCode    String?
-  latitude      Float?
-  longitude     Float?
+  countryCode String
+  countryName String
+  region      String?
+  city        String?
+  fullAddress String?
+  postalCode  String?
+  latitude    Float?
+  longitude   Float?
 
   // --- Google Places (New) --------------------------------------------------
-  googlePlaceId      String? @unique
-  googleRating       Float?
-  googleReviewCount  Int?
-  googleTypes        String[] @default([])
-  googleMapsUri      String?
+  googlePlaceId        String?  @unique
+  googleRating         Float?
+  googleReviewCount    Int?
+  googleTypes          String[] @default([])
+  googleMapsUri        String?
   /// Google's own business status, e.g. OPERATIONAL / CLOSED_TEMPORARILY.
   googleBusinessStatus String?
 
@@ -159,70 +190,115 @@ model Company {
   whatsapp      String?
 
   // --- Social ---------------------------------------------------------------
-  linkedinUrl   String?
-  instagramUrl  String?
-  facebookUrl   String?
-  youtubeUrl    String?
+  linkedinUrl  String?
+  instagramUrl String?
+  facebookUrl  String?
+  youtubeUrl   String?
 
   // --- Activities (Tristate: never guessed) --------------------------------
-  spaActivity       Tristate @default(UNKNOWN)
-  poolActivity      Tristate @default(UNKNOWN)
-  saunaActivity     Tristate @default(UNKNOWN)
-  wellnessActivity  Tristate @default(UNKNOWN)
-  hammamActivity    Tristate @default(UNKNOWN)
-  outdoorLiving     Tristate @default(UNKNOWN)
+  spaActivity         Tristate @default(UNKNOWN)
+  poolActivity        Tristate @default(UNKNOWN)
+  saunaActivity       Tristate @default(UNKNOWN)
+  wellnessActivity    Tristate @default(UNKNOWN)
+  hammamActivity      Tristate @default(UNKNOWN)
+  outdoorLiving       Tristate @default(UNKNOWN)
   /// Sells to hotels / spas / commercial wellness projects.
   hospitalityActivity Tristate @default(UNKNOWN)
-  showroom          Tristate @default(UNKNOWN)
+  showroom            Tristate @default(UNKNOWN)
 
   // --- Company age ----------------------------------------------------------
   // These two are deliberately SEPARATE and must never be conflated.
   /// The year the COMPANY was founded (any line of business).
-  yearFounded          Int?
+  yearFounded           Int?
   yearFoundedConfidence Confidence @default(UNKNOWN)
   /// The year the company started working WITH SPAS / HOT TUBS specifically.
-  spaSinceYear         Int?
-  spaSinceConfidence   Confidence @default(UNKNOWN)
+  spaSinceYear          Int?
+  spaSinceConfidence    Confidence @default(UNKNOWN)
   /// Years working in the spa industry. Derived from spaSinceYear ONLY.
   /// NULL whenever spaSinceYear is unknown — it is never back-filled from yearFounded.
-  yearsInSpaIndustry   Int?
+  yearsInSpaIndustry    Int?
 
   // --- Commercial footprint -------------------------------------------------
   /// Number of physical locations, when verifiable.
-  locationCount Int?
+  locationCount     Int?
   /// Brands the company represents (verified mentions only).
-  brands           String[] @default([])
+  brands            String[] @default([])
   /// Subset of `brands` recognised as competing spa/hot-tub manufacturers.
-  competitorBrands String[] @default([])
+  competitorBrands  String[] @default([])
   /// True when the company was found to already represent Aquavia.
   representsAquavia Tristate @default(UNKNOWN)
 
   // --- Scoring --------------------------------------------------------------
-  score            Int        @default(0)
-  priority         Priority   @default(D)
+  score             Int        @default(0)
+  priority          Priority   @default(D)
   /// Per-signal breakdown of the score, for full auditability in the UI.
-  scoreBreakdown   Json?
-  whyThisCompany   String?
+  scoreBreakdown    Json?
+  whyThisCompany    String?
   recommendedAction NextAction @default(QUALIFY_FIRST)
   /// Overall record confidence, driven by how much was actually verified.
-  confidence       Confidence @default(UNKNOWN)
+  confidence        Confidence @default(UNKNOWN)
   /// 0-100: share of scoring signals that rest on verified data.
-  dataCompleteness Int        @default(0)
+  dataCompleteness  Int        @default(0)
+
+  // --- Dealer relevance & classification -----------------------------------
+  // Separate from `score` above. `score` answers "how attractive is this
+  // company in general?"; everything below answers the narrower and more
+  // commercially useful question "is this a realistic Aquavia RESELLER?".
+  // A massage salon can score respectably on the general score (good reviews,
+  // real website, major city) while being a completely unrealistic dealer.
+  classification           BusinessClassification @default(UNKNOWN)
+  classificationConfidence Confidence             @default(UNKNOWN)
+  /// Human-readable reasons, each traceable to a signal.
+  classificationReasons    String[]               @default([])
+
+  /// 0-100. How likely this company is to resell/distribute Aquavia spas.
+  dealerFitScore      Int                 @default(0)
+  /// Full per-signal audit of dealerFitScore.
+  dealerFitBreakdown  Json?
+  /// Banding of dealerFitScore, unless overridden manually.
+  commercialRelevance CommercialRelevance @default(POSSIBLE)
+
+  /// Manual override. When set, it wins over the computed relevance.
+  relevanceOverride     CommercialRelevance?
+  relevanceOverrideBy   String?
+  relevanceOverrideAt   DateTime?
+  relevanceOverrideNote String?
+
+  /// False when hard exclusion rules apply (massage/beauty/hotel-spa/etc.
+  /// with no confirmed physical product sales). The record is KEPT for
+  /// research history but hidden from the commercial prospect view.
+  isDealerProspect        Boolean @default(true)
+  notDealerProspectReason String?
+
+  /// Signals behind the dealer fit score, each with evidence + source URL.
+  positiveSignals Json?
+  negativeSignals Json?
+  /// Verbatim product-for-sale evidence, with source URLs.
+  productEvidence Json?
+  /// Brand mentions with source, confidence and verbatim quote.
+  brandEvidence   Json?
+
+  whyDealer    String?
+  whyNotDealer String?
+
+  classifiedAt        DateTime?
+  /// Which enrichment stage produced the current classification (1, 2 or 3).
+  classificationStage Int?
 
   // --- CRM ------------------------------------------------------------------
-  crmStatus     CrmStatus @default(NEW)
-  salesNotes    String?
-  lastContactAt DateTime?
+  crmStatus      CrmStatus @default(NEW)
+  salesNotes     String?
+  lastContactAt  DateTime?
   nextFollowUpAt DateTime?
-  ownerName     String?
+  ownerName      String?
 
   // --- Exclusion flags ------------------------------------------------------
-  isExcluded     Boolean        @default(false)
-  exclusionKind  ExclusionKind?
-  exclusionNote  String?
+  isExcluded    Boolean        @default(false)
+  exclusionKind ExclusionKind?
+  exclusionNote String?
 
   // --- Research -------------------------------------------------------------
-  researchNotes String?
+  researchNotes    String?
   /// Set when enrichment could not run (e.g. TAVILY_API_KEY missing).
   enrichmentStatus String?
 
@@ -241,6 +317,9 @@ model Company {
   @@index([crmStatus])
   @@index([isExcluded])
   @@index([websiteDomain])
+  @@index([commercialRelevance, dealerFitScore])
+  @@index([classification])
+  @@index([isDealerProspect])
 }
 
 // ---------------------------------------------------------------------------
@@ -252,8 +331,8 @@ model DecisionMaker {
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  fullName  String
-  position  String?
+  fullName   String
+  position   String?
   /// Normalised role bucket (OWNER, CEO, SALES_DIRECTOR, ...).
   roleBucket String?
 
@@ -311,11 +390,11 @@ model SearchRun {
   status      RunStatus   @default(PENDING)
 
   /// The localized query plan generated for this market, stored for audit.
-  queryPlan Json?
+  queryPlan  Json?
   /// Index of the next query to execute — drives chunked processing.
-  cursor    Int  @default(0)
+  cursor     Int   @default(0)
   /// Total number of queries in the plan.
-  totalSteps Int @default(0)
+  totalSteps Int   @default(0)
 
   discoveredCount Int @default(0)
   newCount        Int @default(0)
@@ -330,7 +409,7 @@ model SearchRun {
   startedAt  DateTime  @default(now())
   finishedAt DateTime?
 
-  logs     SearchRunLog[]
+  logs      SearchRunLog[]
   companies SearchRunCompany[]
 
   @@index([countryCode])
@@ -395,8 +474,8 @@ model ExclusionEntry {
 // ---------------------------------------------------------------------------
 
 model Market {
-  id          String  @id @default(cuid())
-  countryCode String  @unique
+  id          String @id @default(cuid())
+  countryCode String @unique
   countryName String
 
   notes       String?

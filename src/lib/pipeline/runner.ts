@@ -17,6 +17,7 @@ import { extractDecisionMakers } from '@/lib/enrich/decisionMakers';
 import { scoreCompany, type ScoreInput } from '@/lib/scoring/score';
 import { buildNarrative } from '@/lib/scoring/narrative';
 import { geographicImportance } from '@/lib/geo/majorCities';
+import { classifyCompanyById } from '@/lib/relevance/reclassify';
 import { yearsInSpaIndustry, mergeStringLists } from '@/lib/utils';
 import {
   loadExclusionRules,
@@ -573,6 +574,11 @@ export async function rescoreCompany(companyId: string): Promise<void> {
       recommendedAction: narrative.recommendedAction,
     },
   });
+
+  // Dealer relevance is a separate axis from the general opportunity score.
+  // Running it here keeps every newly discovered company classified without a
+  // second pass, using only data already stored (no extra API calls).
+  await classifyCompanyById(companyId);
 }
 
 // ---------------------------------------------------------------------------

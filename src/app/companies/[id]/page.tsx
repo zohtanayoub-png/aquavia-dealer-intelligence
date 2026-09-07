@@ -3,8 +3,9 @@ import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { PageHeader } from '@/components/layout/PageHeader';
 import {
-  ActionBadge, Banner, Card, CardHeader, ConfidenceDot, CrmBadge,
-  PriorityBadge, TristateBadge, Value,
+  ActionBadge, Banner, Card, CardHeader, ClassificationBadge, ConfidenceDot,
+  CrmBadge, DealerFitCell, NotProspectFlag, PriorityBadge, RelevanceBadge,
+  TristateBadge, Value,
 } from '@/components/ui/primitives';
 import { CrmPanel } from '@/components/companies/CrmPanel';
 import { PRIORITY_LABELS } from '@/lib/scoring/score';
@@ -31,6 +32,10 @@ export default async function CompanyProfilePage({
   if (!company) notFound();
 
   const breakdown = (company.scoreBreakdown as unknown as ScoreSignal[] | null) ?? [];
+  const positiveSignals = (company.positiveSignals as unknown as RelevanceSignal[] | null) ?? [];
+  const negativeSignals = (company.negativeSignals as unknown as RelevanceSignal[] | null) ?? [];
+  const productEvidence = (company.productEvidence as unknown as ProductEvidenceRow[] | null) ?? [];
+  const brandEvidence = (company.brandEvidence as unknown as BrandEvidenceRow[] | null) ?? [];
   const verified = breakdown.filter((s) => s.verified);
   const unverified = breakdown.filter((s) => !s.verified);
 
@@ -112,6 +117,192 @@ export default async function CompanyProfilePage({
             </div>
           </div>
         </Card>
+
+        {/* ---- Dealer relevance ---- */}
+        <Card className="overflow-hidden">
+          <CardHeader
+            title="Aquavia dealer relevance"
+            subtitle="A separate axis from the general opportunity score: could this company actually resell our spas?"
+          />
+          <div className="grid gap-px bg-sand-200 md:grid-cols-3">
+            <div className="bg-white px-5 py-4">
+              <p className="label">Dealer fit score</p>
+              <div className="mt-1.5"><DealerFitCell score={company.dealerFitScore} /></div>
+              <div className="mt-2.5"><RelevanceBadge relevance={company.commercialRelevance} /></div>
+              {company.relevanceOverride ? (
+                <p className="mt-1.5 text-2xs text-amber-700">
+                  Manually overridden{company.relevanceOverrideBy ? ` by ${company.relevanceOverrideBy}` : ''}.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="bg-white px-5 py-4">
+              <p className="label">Business classification</p>
+              <div className="mt-1.5"><ClassificationBadge classification={company.classification} /></div>
+              <div className="mt-2"><ConfidenceDot confidence={company.classificationConfidence} /></div>
+              {company.classificationReasons.length > 0 ? (
+                <ul className="mt-2 space-y-1">
+                  {company.classificationReasons.map((reason) => (
+                    <li key={reason} className="text-2xs leading-relaxed text-sand-400">• {reason}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+
+            <div className="bg-white px-5 py-4">
+              <p className="label">Prospect status</p>
+              <div className="mt-1.5">
+                {company.isDealerProspect ? (
+                  <span className="chip bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-600/25">
+                    DEALER PROSPECT
+                  </span>
+                ) : (
+                  <NotProspectFlag reason={company.notDealerProspectReason} />
+                )}
+              </div>
+              {company.notDealerProspectReason ? (
+                <p className="mt-2 text-2xs leading-relaxed text-rose-800">{company.notDealerProspectReason}</p>
+              ) : null}
+              {company.classifiedAt ? (
+                <p className="mt-2 text-2xs text-sand-400">
+                  Classified {company.classifiedAt.toISOString().slice(0, 10)} (stage {company.classificationStage ?? 1})
+                </p>
+              ) : null}
+            </div>
+          </div>
+        </Card>
+
+        <div className="grid gap-5 lg:grid-cols-2">
+          <Card>
+            <CardHeader title="Why this could be an Aquavia dealer" subtitle={`${positiveSignals.length} positive signal(s)`} />
+            <div className="px-4 py-3">
+              <p className="text-[13px] leading-relaxed text-ink-800"><Value>{company.whyDealer}</Value></p>
+            </div>
+            {positiveSignals.length > 0 ? (
+              <ul className="divide-y divide-sand-200 border-t border-sand-200">
+                {positiveSignals.map((signal, i) => (
+                  <li key={`${signal.code}-${i}`} className="px-4 py-2.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-[13px] font-medium text-ink-900">{signal.label}</span>
+                      <span className="tnum shrink-0 text-[13px] font-semibold text-emerald-700">+{signal.points}</span>
+                    </div>
+                    {signal.quote ? (
+                      <blockquote className="mt-1 border-l-2 border-emerald-300 pl-2.5 text-2xs italic leading-relaxed text-ink-700">
+                        {signal.quote}
+                      </blockquote>
+                    ) : null}
+                    {signal.sourceUrl ? (
+                      <a href={signal.sourceUrl} target="_blank" rel="noreferrer noopener" className="mt-1 block truncate text-2xs text-aqua-700 hover:underline">
+                        {signal.sourceUrl}
+                      </a>
+                    ) : (
+                      <p className="mt-1 text-2xs text-sand-400">Source: {signal.source.replace(/_/g, ' ').toLowerCase()}</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </Card>
+
+          <Card>
+            <CardHeader title="Why this may not be a good dealer" subtitle={`${negativeSignals.length} negative signal(s)`} />
+            <div className="px-4 py-3">
+              <p className="text-[13px] leading-relaxed text-ink-800"><Value>{company.whyNotDealer}</Value></p>
+            </div>
+            {negativeSignals.length > 0 ? (
+              <ul className="divide-y divide-sand-200 border-t border-sand-200">
+                {negativeSignals.map((signal, i) => (
+                  <li key={`${signal.code}-${i}`} className="px-4 py-2.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-[13px] font-medium text-ink-900">{signal.label}</span>
+                      <span className="tnum shrink-0 text-[13px] font-semibold text-rose-700">{signal.points}</span>
+                    </div>
+                    {signal.quote ? (
+                      <blockquote className="mt-1 border-l-2 border-rose-300 pl-2.5 text-2xs italic leading-relaxed text-ink-700">
+                        {signal.quote}
+                      </blockquote>
+                    ) : null}
+                    {signal.sourceUrl ? (
+                      <a href={signal.sourceUrl} target="_blank" rel="noreferrer noopener" className="mt-1 block truncate text-2xs text-aqua-700 hover:underline">
+                        {signal.sourceUrl}
+                      </a>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </Card>
+        </div>
+
+        <div className="grid gap-5 lg:grid-cols-2">
+          <Card>
+            <CardHeader title="Product evidence" subtitle="Verbatim proof of physical products being sold" />
+            {productEvidence.length === 0 ? (
+              <p className="px-4 py-6 text-[13px] text-sand-400">
+                UNKNOWN — no physical product evidence has been verified for this company.
+              </p>
+            ) : (
+              <ul className="divide-y divide-sand-200">
+                {productEvidence.map((item, i) => (
+                  <li key={`${item.phrase}-${i}`} className="px-4 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="chip bg-aqua-50 text-aqua-800 ring-1 ring-inset ring-aqua-500/25">
+                        {item.category.replace(/_/g, ' ')}
+                      </span>
+                      <span className="font-mono text-2xs text-sand-400">{item.lang.toUpperCase()}</span>
+                      <span className="text-[13px] text-ink-900">&ldquo;{item.phrase}&rdquo;</span>
+                    </div>
+                    <blockquote className="mt-1 border-l-2 border-sand-300 pl-2.5 text-2xs italic leading-relaxed text-ink-700">
+                      {item.quote}
+                    </blockquote>
+                    {item.sourceUrl ? (
+                      <a href={item.sourceUrl} target="_blank" rel="noreferrer noopener" className="mt-1 block truncate text-2xs text-aqua-700 hover:underline">
+                        {item.sourceUrl}
+                      </a>
+                    ) : (
+                      <p className="mt-1 text-2xs text-sand-400">Source: company name</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <Card>
+            <CardHeader title="Competitor brand evidence" subtitle="Brands represented, with the source that evidences each" />
+            {brandEvidence.length === 0 ? (
+              <p className="px-4 py-6 text-[13px] text-sand-400">
+                UNKNOWN — no brand representation has been verified.
+              </p>
+            ) : (
+              <ul className="divide-y divide-sand-200">
+                {brandEvidence.map((item, i) => (
+                  <li key={`${item.brand}-${i}`} className="px-4 py-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[13px] font-medium text-ink-900">{item.brand}</span>
+                      <div className="flex items-center gap-2">
+                        {item.isCompetitor ? (
+                          <span className="chip bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-600/25">Competitor</span>
+                        ) : null}
+                        <ConfidenceDot confidence={item.confidence} />
+                      </div>
+                    </div>
+                    {item.quote ? (
+                      <blockquote className="mt-1 border-l-2 border-sand-300 pl-2.5 text-2xs italic leading-relaxed text-ink-700">
+                        {item.quote}
+                      </blockquote>
+                    ) : null}
+                    {item.sourceUrl ? (
+                      <a href={item.sourceUrl} target="_blank" rel="noreferrer noopener" className="mt-1 block truncate text-2xs text-aqua-700 hover:underline">
+                        {item.sourceUrl}
+                      </a>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_22rem]">
           <div className="space-y-5">
@@ -396,6 +587,31 @@ export default async function CompanyProfilePage({
       </div>
     </>
   );
+}
+
+interface RelevanceSignal {
+  code: string;
+  label: string;
+  points: number;
+  quote: string | null;
+  sourceUrl: string | null;
+  source: string;
+}
+
+interface ProductEvidenceRow {
+  category: string;
+  phrase: string;
+  lang: string;
+  quote: string;
+  sourceUrl: string | null;
+}
+
+interface BrandEvidenceRow {
+  brand: string;
+  isCompetitor: boolean;
+  sourceUrl: string | null;
+  quote: string | null;
+  confidence: string;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

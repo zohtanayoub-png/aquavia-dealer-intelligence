@@ -1,5 +1,9 @@
 /** Shared company filtering — used by the table, the map and the exports. */
-import { Prisma, type CrmStatus, type Priority, type Tristate } from '@prisma/client';
+import {
+  Prisma,
+  type BusinessClassification, type CommercialRelevance,
+  type CrmStatus, type Priority, type Tristate,
+} from '@prisma/client';
 
 export interface CompanyFilters {
   q?: string | null;
@@ -17,6 +21,16 @@ export interface CompanyFilters {
   includeExcluded?: boolean | null;
   sort?: string | null;
   dir?: 'asc' | 'desc' | null;
+
+  // --- Dealer relevance ---
+  classification?: string[] | null;
+  relevance?: string[] | null;
+  minDealerFit?: number | null;
+  competitorBrandOnly?: boolean | null;
+  /** Show companies flagged NOT A DEALER PROSPECT. Off by default. */
+  includeNonProspects?: boolean | null;
+  /** Show IRRELEVANT companies. Off by default. */
+  includeIrrelevant?: boolean | null;
 }
 
 /**
@@ -42,6 +56,9 @@ const ORDER_BY: Record<string, (dir: Prisma.SortOrder) => Prisma.CompanyOrderByW
   crmStatus: (dir) => ({ crmStatus: dir }),
   dataCompleteness: (dir) => ({ dataCompleteness: dir }),
   discoveredAt: (dir) => ({ discoveredAt: dir }),
+  dealerFitScore: (dir) => ({ dealerFitScore: dir }),
+  classification: (dir) => ({ classification: dir }),
+  commercialRelevance: (dir) => ({ commercialRelevance: dir }),
 
   // Nullable columns — `nulls: 'last'` keeps UNKNOWN values out of the way in
   // BOTH directions, so an ascending sort does not open with a wall of blanks.
@@ -104,7 +121,12 @@ export function sanitizeOrderBy(
 }
 
 /** Default sort: highest opportunity score first. */
-export const DEFAULT_SORT_FIELD = 'score';
+/**
+ * Default sort is DEALER FIT, not the general opportunity score.
+ * The whole point of this layer is that the most commercially useful ordering
+ * is "who could actually resell our spas", not "who looks impressive".
+ */
+export const DEFAULT_SORT_FIELD = 'dealerFitScore';
 
 /**
  * Enum values accepted from the query string.
@@ -119,6 +141,15 @@ const CRM_STATUS_VALUES = new Set<CrmStatus>([
   'NEGOTIATING', 'DEALER', 'NOT_INTERESTED', 'DO_NOT_CONTACT',
 ]);
 const TRISTATE_VALUES = new Set<Tristate>(['YES', 'NO', 'UNKNOWN']);
+const CLASSIFICATION_VALUES = new Set<BusinessClassification>([
+  'HOT_TUB_SPA_RETAILER', 'POOL_AND_SPA_COMPANY', 'POOL_COMPANY', 'WELLNESS_EQUIPMENT',
+  'SAUNA_HAMMAM_EQUIPMENT', 'OUTDOOR_LIVING', 'HOTEL_HOSPITALITY_SUPPLIER',
+  'CONSTRUCTION_LANDSCAPE_RELEVANT', 'MASSAGE_DAY_SPA', 'BEAUTY_AESTHETICS',
+  'HOTEL_SPA_ONLY', 'HAMMAM_SERVICE_ONLY', 'IRRELEVANT', 'UNKNOWN',
+]);
+const RELEVANCE_VALUES = new Set<CommercialRelevance>([
+  'HIGHLY_RELEVANT', 'RELEVANT', 'POSSIBLE', 'LOW_RELEVANCE', 'IRRELEVANT',
+]);
 
 function keepValid<T>(values: string[] | null | undefined, allowed: Set<T>): T[] {
   if (!values?.length) return [];
@@ -163,6 +194,13 @@ export function parseFilters(searchParams: URLSearchParams): CompanyFilters {
     includeExcluded: bool('includeExcluded'),
     sort: searchParams.get('sort'),
     dir: (searchParams.get('dir') as 'asc' | 'desc' | null) ?? null,
+
+    classification: listParam('classification'),
+    relevance: listParam('relevance'),
+    minDealerFit: num('minDealerFit'),
+    competitorBrandOnly: bool('competitorBrandOnly'),
+    includeNonProspects: bool('includeNonProspects'),
+    includeIrrelevant: bool('includeIrrelevant'),
   };
 }
 
@@ -202,6 +240,26 @@ export function buildWhere(f: CompanyFilters): Prisma.CompanyWhereInput {
   if (f.hasContact === true) and.push({ decisionMakers: { some: {} } });
   if (f.competitorBrand) and.push({ competitorBrands: { has: f.competitorBrand } });
   if (!f.includeExcluded) and.push({ isExcluded: false });
+
+  // --- Dealer relevance ----------------------------------------------------
+  const classifications = keepValid(f.classification, CLASSIFICATION_VALUES);
+  if (classifications.length > 0) and.push({ classification: { in: classifications } });
+
+  const relevances = keepValid(f.relevance, RELEVANCE_VALUES);
+  if (relevances.length > 0) {
+    and.push({ commercialRelevance: { in: relevances } });
+  } else if (!f.includeIrrelevant) {
+    // The commercial prospect view: irrelevant companies stay in the database
+    // for research history but are hidden unless explicitly requested.
+    and.push({ commercialRelevance: { not: 'IRRELEVANT' } });
+  }
+
+  if (!f.includeNonProspects) and.push({ isDealerProspect: true });
+
+  if (f.minDealerFit !== null && f.minDealerFit !== undefined) {
+    and.push({ dealerFitScore: { gte: f.minDealerFit } });
+  }
+  if (f.competitorBrandOnly === true) and.push({ competitorBrands: { isEmpty: false } });
 
   if (and.length > 0) where.AND = and;
   return where;

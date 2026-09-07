@@ -227,3 +227,103 @@ export function Banner({
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Dealer relevance
+// ---------------------------------------------------------------------------
+
+export const RELEVANCE_ORDER = [
+  'HIGHLY_RELEVANT', 'RELEVANT', 'POSSIBLE', 'LOW_RELEVANCE', 'IRRELEVANT',
+] as const;
+
+export type Relevance = (typeof RELEVANCE_ORDER)[number];
+
+/**
+ * Emoji plus a text label — never emoji alone, so the meaning survives
+ * screen readers, monochrome printing and CSV export.
+ */
+export const RELEVANCE_META: Record<string, { emoji: string; label: string; className: string }> = {
+  HIGHLY_RELEVANT: { emoji: '🔥', label: 'Highly relevant', className: 'bg-emerald-50 text-emerald-800 ring-1 ring-inset ring-emerald-600/25' },
+  RELEVANT:        { emoji: '✅', label: 'Relevant',        className: 'bg-teal-50 text-teal-800 ring-1 ring-inset ring-teal-600/25' },
+  POSSIBLE:        { emoji: '🟡', label: 'Possible',        className: 'bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-600/25' },
+  LOW_RELEVANCE:   { emoji: '⚪', label: 'Low relevance',   className: 'bg-sand-100 text-ink-700 ring-1 ring-inset ring-sand-300' },
+  IRRELEVANT:      { emoji: '❌', label: 'Irrelevant',      className: 'bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-600/25' },
+};
+
+export function RelevanceBadge({ relevance }: { relevance: string }) {
+  const meta = RELEVANCE_META[relevance] ?? RELEVANCE_META.LOW_RELEVANCE;
+  return (
+    <span className={clsx('chip normal-case tracking-normal', meta.className)}>
+      <span aria-hidden>{meta.emoji}</span>
+      <span className="font-semibold">{meta.label}</span>
+    </span>
+  );
+}
+
+export const CLASSIFICATION_LABELS: Record<string, string> = {
+  HOT_TUB_SPA_RETAILER: 'Hot tub / spa retailer',
+  POOL_AND_SPA_COMPANY: 'Pool & spa company',
+  POOL_COMPANY: 'Pool company',
+  WELLNESS_EQUIPMENT: 'Wellness equipment',
+  SAUNA_HAMMAM_EQUIPMENT: 'Sauna / hammam equipment',
+  OUTDOOR_LIVING: 'Outdoor living',
+  HOTEL_HOSPITALITY_SUPPLIER: 'Hotel / hospitality supplier',
+  CONSTRUCTION_LANDSCAPE_RELEVANT: 'Construction / landscape',
+  MASSAGE_DAY_SPA: 'Massage / day spa',
+  BEAUTY_AESTHETICS: 'Beauty / aesthetics',
+  HOTEL_SPA_ONLY: 'Hotel spa only',
+  HAMMAM_SERVICE_ONLY: 'Hammam service only',
+  IRRELEVANT: 'Irrelevant',
+  UNKNOWN: 'UNKNOWN',
+};
+
+/** Classifications that are service businesses rather than resellers. */
+const SERVICE_CLASSES = new Set([
+  'MASSAGE_DAY_SPA', 'BEAUTY_AESTHETICS', 'HOTEL_SPA_ONLY', 'HAMMAM_SERVICE_ONLY', 'IRRELEVANT',
+]);
+
+export function ClassificationBadge({ classification }: { classification: string }) {
+  const isService = SERVICE_CLASSES.has(classification);
+  const isUnknown = classification === 'UNKNOWN';
+  return (
+    <span
+      className={clsx(
+        'chip normal-case tracking-normal',
+        isUnknown ? 'bg-sand-100 text-sand-400 ring-1 ring-inset ring-sand-300'
+        : isService ? 'bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-600/20'
+        : 'bg-aqua-50 text-aqua-800 ring-1 ring-inset ring-aqua-500/25',
+      )}
+    >
+      {CLASSIFICATION_LABELS[classification] ?? classification}
+    </span>
+  );
+}
+
+/** Dealer fit, visually distinct from the general opportunity score. */
+export function DealerFitCell({ score }: { score: number }) {
+  const colour =
+    score >= 80 ? 'bg-emerald-500'
+    : score >= 60 ? 'bg-teal-500'
+    : score >= 40 ? 'bg-amber-500'
+    : score >= 20 ? 'bg-sand-400'
+    : 'bg-rose-400';
+  return (
+    <div className="flex items-center gap-2">
+      <span className="tnum w-7 text-right text-[13px] font-semibold text-ink-900">{score}</span>
+      <span className="h-1.5 w-14 overflow-hidden rounded-full bg-sand-200">
+        <span className={clsx('block h-full rounded-full', colour)} style={{ width: `${score}%` }} />
+      </span>
+    </div>
+  );
+}
+
+export function NotProspectFlag({ reason }: { reason: string | null }) {
+  return (
+    <span
+      className="chip bg-rose-50 text-rose-800 ring-1 ring-inset ring-rose-600/25"
+      title={reason ?? undefined}
+    >
+      NOT A DEALER PROSPECT
+    </span>
+  );
+}

@@ -77,8 +77,17 @@ describe('buildOrderBy — the reported bug', () => {
     expect(isObjectForm((orderBy[0] as Record<string, unknown>).score)).toBe(false);
   });
 
-  it('produces the exact default ordering: score desc, then name asc', () => {
+  it('defaults to dealer fit desc, then name asc', () => {
+    // Dealer fit is the commercially useful default: "who could actually
+    // resell our spas", not "who looks impressive on the general score".
     expect(buildOrderBy(parseFilters(new URLSearchParams('')))).toEqual([
+      { dealerFitScore: 'desc' },
+      { name: 'asc' },
+    ]);
+  });
+
+  it('still orders by score with a bare SortOrder when asked', () => {
+    expect(buildOrderBy(parseFilters(new URLSearchParams('sort=score&dir=desc')))).toEqual([
       { score: 'desc' },
       { name: 'asc' },
     ]);

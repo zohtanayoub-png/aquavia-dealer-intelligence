@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
-  Banner, Card, CrmBadge, EmptyState, PriorityBadge, ScoreCell, TristateBadge, Value,
+  Banner, Card, ClassificationBadge, CrmBadge, DealerFitCell, EmptyState,
+  NotProspectFlag, PriorityBadge, RelevanceBadge, ScoreCell, TristateBadge, Value,
+  CLASSIFICATION_LABELS, RELEVANCE_META, RELEVANCE_ORDER,
 } from '@/components/ui/primitives';
 import { CRM_STATUSES } from '@/components/ui/primitives';
 
@@ -32,6 +34,11 @@ interface CompanyRow {
   website: string | null;
   phone: string | null;
   crmStatus: string;
+  dealerFitScore: number;
+  classification: string;
+  commercialRelevance: string;
+  isDealerProspect: boolean;
+  notDealerProspectReason: string | null;
   isExcluded: boolean;
   exclusionKind: string | null;
   dataCompleteness: number;
@@ -43,7 +50,10 @@ interface Country { code: string; name: string }
 const COLUMNS: { key: string; label: string; sortable?: boolean; className?: string }[] = [
   { key: 'name', label: 'Company', sortable: true },
   { key: 'city', label: 'City', sortable: true },
-  { key: 'score', label: 'Score', sortable: true },
+  { key: 'dealerFitScore', label: 'Dealer fit', sortable: true },
+  { key: 'commercialRelevance', label: 'Relevance', sortable: true },
+  { key: 'classification', label: 'Classification', sortable: true },
+  { key: 'score', label: 'Opp. score', sortable: true },
   { key: 'priority', label: 'Priority', sortable: true },
   { key: 'googleRating', label: 'Rating', sortable: true },
   { key: 'googleReviewCount', label: 'Reviews', sortable: true },
@@ -76,8 +86,13 @@ export function CompanyTable({
   const [spaOnly, setSpaOnly] = useState(false);
   const [withContact, setWithContact] = useState(false);
   const [includeExcluded, setIncludeExcluded] = useState(false);
-  const [sort, setSort] = useState('score');
+  const [sort, setSort] = useState('dealerFitScore');
   const [dir, setDir] = useState<'asc' | 'desc'>('desc');
+  const [relevance, setRelevance] = useState<string[]>([]);
+  const [classification, setClassification] = useState('');
+  const [minDealerFit, setMinDealerFit] = useState('');
+  const [competitorBrandOnly, setCompetitorBrandOnly] = useState(false);
+  const [includeIrrelevant, setIncludeIrrelevant] = useState(false);
 
   const query = useMemo(() => {
     const p = new URLSearchParams();
@@ -90,10 +105,22 @@ export function CompanyTable({
     if (spaOnly) p.set('spaActivity', 'YES');
     if (withContact) p.set('hasContact', 'true');
     if (includeExcluded) p.set('includeExcluded', 'true');
+    for (const value of relevance) p.append('relevance', value);
+    if (classification) p.set('classification', classification);
+    if (minDealerFit) p.set('minDealerFit', minDealerFit);
+    if (competitorBrandOnly) p.set('competitorBrandOnly', 'true');
+    if (includeIrrelevant) {
+      p.set('includeIrrelevant', 'true');
+      p.set('includeNonProspects', 'true');
+    }
     p.set('sort', sort);
     p.set('dir', dir);
     return p;
-  }, [q, country, priority, crmStatus, minScore, showroomOnly, spaOnly, withContact, includeExcluded, sort, dir]);
+  }, [
+    q, country, priority, crmStatus, minScore, showroomOnly, spaOnly, withContact,
+    includeExcluded, relevance, classification, minDealerFit, competitorBrandOnly,
+    includeIrrelevant, sort, dir,
+  ]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -128,6 +155,10 @@ export function CompanyTable({
       setSort(key);
       setDir(key === 'name' || key === 'city' ? 'asc' : 'desc');
     }
+  }
+
+  function toggleRelevance(value: string) {
+    setRelevance((prev) => (prev.includes(value) ? prev.filter((r) => r !== value) : [...prev, value]));
   }
 
   function togglePriority(value: string) {
@@ -202,7 +233,66 @@ export function CompanyTable({
           </div>
         </div>
 
+        <div className="mt-3 flex flex-wrap items-end gap-3 border-t border-sand-200 pt-3">
+          <div>
+            <span className="label">Commercial relevance</span>
+            <div className="mt-1.5 flex flex-wrap gap-1">
+              {RELEVANCE_ORDER.map((value) => {
+                const meta = RELEVANCE_META[value];
+                const active = relevance.includes(value);
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => toggleRelevance(value)}
+                    aria-pressed={active}
+                    className={`inline-flex h-[38px] items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition ${
+                      active
+                        ? 'border-aqua-500 bg-aqua-50 text-aqua-800'
+                        : 'border-sand-300 bg-white text-ink-700 hover:border-sand-400'
+                    }`}
+                  >
+                    <span aria-hidden>{meta.emoji}</span>
+                    {meta.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="w-56">
+            <label htmlFor="classification" className="label">Business classification</label>
+            <select
+              id="classification"
+              value={classification}
+              onChange={(e) => setClassification(e.target.value)}
+              className="field mt-1.5"
+            >
+              <option value="">All classifications</option>
+              {Object.entries(CLASSIFICATION_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="w-32">
+            <label htmlFor="minDealerFit" className="label">Dealer fit ≥</label>
+            <input
+              id="minDealerFit"
+              type="number"
+              min={0}
+              max={100}
+              value={minDealerFit}
+              onChange={(e) => setMinDealerFit(e.target.value)}
+              placeholder="0"
+              className="field mt-1.5 tnum"
+            />
+          </div>
+        </div>
+
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-sand-200 pt-3">
+          <Toggle label="Competitor brand" checked={competitorBrandOnly} onChange={setCompetitorBrandOnly} />
+          <Toggle label="Include irrelevant" checked={includeIrrelevant} onChange={setIncludeIrrelevant} />
           <Toggle label="Showroom only" checked={showroomOnly} onChange={setShowroomOnly} />
           <Toggle label="Already sells spas" checked={spaOnly} onChange={setSpaOnly} />
           <Toggle label="Has a decision maker" checked={withContact} onChange={setWithContact} />
@@ -267,7 +357,12 @@ export function CompanyTable({
                 </tr>
               ) : (
                 rows.map((c) => (
-                  <tr key={c.id} className={c.isExcluded ? 'bg-rose-50/40' : undefined}>
+                  <tr
+                    key={c.id}
+                    className={
+                      c.isExcluded || !c.isDealerProspect ? 'bg-rose-50/30' : undefined
+                    }
+                  >
                     <td className="max-w-[18rem]">
                       <Link href={`/companies/${c.id}`} className="block truncate font-medium text-ink-900 hover:text-aqua-700">
                         {c.name}
@@ -276,8 +371,14 @@ export function CompanyTable({
                         {c.countryName}
                         {c.isExcluded ? ` · EXCLUDED (${c.exclusionKind})` : ''}
                       </p>
+                      {!c.isDealerProspect ? (
+                        <p className="mt-1"><NotProspectFlag reason={c.notDealerProspectReason} /></p>
+                      ) : null}
                     </td>
                     <td className="text-ink-700"><Value>{c.city}</Value></td>
+                    <td><DealerFitCell score={c.dealerFitScore} /></td>
+                    <td><RelevanceBadge relevance={c.commercialRelevance} /></td>
+                    <td><ClassificationBadge classification={c.classification} /></td>
                     <td><ScoreCell score={c.score} priority={c.priority} /></td>
                     <td><PriorityBadge priority={c.priority} /></td>
                     <td className="tnum text-ink-700">
