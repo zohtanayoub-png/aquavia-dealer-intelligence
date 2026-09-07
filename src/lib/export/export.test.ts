@@ -44,6 +44,15 @@ function company(overrides: Partial<ExportCompany> = {}): ExportCompany {
     locationCount: null, brands: ['Wellis'], competitorBrands: ['Wellis'],
     representsAquavia: 'UNKNOWN',
     score: 74, priority: 'B', scoreBreakdown: null,
+    classification: 'POOL_AND_SPA_COMPANY', classificationConfidence: 'HIGH',
+    classificationReasons: [], dealerFitScore: 82, dealerFitBreakdown: null,
+    commercialRelevance: 'HIGHLY_RELEVANT', relevanceOverride: null,
+    relevanceOverrideBy: null, relevanceOverrideAt: null, relevanceOverrideNote: null,
+    isDealerProspect: true, notDealerProspectReason: null,
+    positiveSignals: [{ code: 'X' }, { code: 'Y' }], negativeSignals: [],
+    productEvidence: [{ phrase: 'vente de spas' }], brandEvidence: null,
+    whyDealer: 'Sells hot tubs and builds pools.', whyNotDealer: 'No negative signals found.',
+    classifiedAt: new Date('2026-02-01T00:00:00Z'), classificationStage: 1,
     whyThisCompany: 'Already sells spas.', recommendedAction: 'CALL',
     confidence: 'MEDIUM', dataCompleteness: 55,
     crmStatus: 'NEW', salesNotes: null, lastContactAt: null, nextFollowUpAt: null,
@@ -98,10 +107,12 @@ describe('toCsv', () => {
 });
 
 describe('Google My Maps export', () => {
-  it('emits exactly the columns the brief requires', () => {
+  it('keeps the required columns and adds the dealer relevance ones', () => {
     expect(GOOGLE_MY_MAPS_COLUMNS.map((c) => c.header)).toEqual([
-      'Company', 'Address', 'Latitude', 'Longitude', 'Score', 'Priority',
-      'Rating', 'Reviews', 'Phone', 'Website', 'Brands', 'Decision Maker', 'Notes',
+      'Company', 'Address', 'Latitude', 'Longitude',
+      'Dealer Fit', 'Relevance', 'Classification',
+      'Score', 'Priority', 'Rating', 'Reviews', 'Phone', 'Website',
+      'Brands', 'Decision Maker', 'Notes',
     ]);
   });
 
@@ -117,5 +128,48 @@ describe('Google My Maps export', () => {
     const result = toGoogleMyMapsCsv([company({ latitude: null, longitude: null, name: 'No Coords Ltd' })]);
     expect(result.includedCount).toBe(0);
     expect(result.skipped).toEqual(['No Coords Ltd']);
+  });
+});
+
+describe('dealer relevance in exports', () => {
+  it('exports dealer fit, relevance and classification alongside the general score', () => {
+    const csv = toCsv([company()], 'full');
+    const [header, row] = csv.replace(/^\ufeff/, '').trim().split('\r\n');
+    const columns = parseCsvRow(header);
+    const values = parseCsvRow(row);
+
+    expect(values[columns.indexOf('Dealer Fit Score')]).toBe('82');
+    expect(values[columns.indexOf('Commercial Relevance')]).toBe('Highly relevant');
+    expect(values[columns.indexOf('Business Classification')]).toBe('Pool & spa company');
+    expect(values[columns.indexOf('Is Dealer Prospect')]).toBe('YES');
+    // The two scores are separate axes and must both survive the export.
+    expect(values[columns.indexOf('Aquavia Score')]).toBe('74');
+  });
+
+  it('marks a non-prospect clearly rather than silently omitting it', () => {
+    const csv = toCsv([company({
+      name: 'Wang Thai Spa', classification: 'MASSAGE_DAY_SPA', dealerFitScore: 0,
+      commercialRelevance: 'IRRELEVANT', isDealerProspect: false,
+      notDealerProspectReason: 'NOT A DEALER PROSPECT — massage / day spa.',
+    })], 'full');
+    const [header, row] = csv.replace(/^\ufeff/, '').trim().split('\r\n');
+    const columns = parseCsvRow(header);
+    const values = parseCsvRow(row);
+    expect(values[columns.indexOf('Is Dealer Prospect')]).toBe('NO');
+    expect(values[columns.indexOf('Not A Dealer Prospect Reason')]).toContain('NOT A DEALER PROSPECT');
+  });
+
+  it('puts relevance into the Google My Maps note so a rep sees it on the pin', () => {
+    const result = toGoogleMyMapsCsv([company()]);
+    expect(result.csv).toContain('Dealer fit 82');
+    expect(result.csv).toContain('Highly relevant');
+  });
+
+  it('writes UNKNOWN for unclassified companies rather than an empty cell', () => {
+    const csv = toCsv([company({ whyDealer: null, notDealerProspectReason: null })], 'full');
+    const [header, row] = csv.replace(/^\ufeff/, '').trim().split('\r\n');
+    const columns = parseCsvRow(header);
+    const values = parseCsvRow(row);
+    expect(values[columns.indexOf('Why This Could Be A Dealer')]).toBe('UNKNOWN');
   });
 });

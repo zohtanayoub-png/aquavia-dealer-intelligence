@@ -23,27 +23,39 @@ export interface MapPoint {
   website: string | null;
   competitorBrands: string[];
   showroom: string;
+  dealerFitScore: number;
+  commercialRelevance: string;
+  classification: string;
+  isDealerProspect: boolean;
 }
 
-/** Marker categories required by the brief, each visually distinct. */
-type Category = 'A' | 'B' | 'C' | 'DEALER' | 'EXCLUDED' | 'OTHER';
+/**
+ * Map categories follow COMMERCIAL RELEVANCE, not the general priority score.
+ * A field trip is planned around who could actually stock our spas, so a
+ * massage salon with a glowing rating must not look like a lead on the map.
+ */
+type Category =
+  | 'HIGHLY_RELEVANT' | 'RELEVANT' | 'POSSIBLE' | 'LOW_RELEVANCE'
+  | 'DEALER' | 'EXCLUDED' | 'NOT_PROSPECT';
 
 const CATEGORY_STYLE: Record<Category, { colour: string; label: string; radius: number }> = {
-  A: { colour: '#0F9D6E', label: 'Priority A', radius: 9 },
-  B: { colour: '#2A7FB8', label: 'Priority B', radius: 8 },
-  C: { colour: '#D9A02B', label: 'Priority C', radius: 7 },
-  DEALER: { colour: '#7C3AED', label: 'Existing dealer', radius: 10 },
-  EXCLUDED: { colour: '#E11D48', label: 'Excluded', radius: 7 },
-  OTHER: { colour: '#8A9199', label: 'Priority D / other', radius: 6 },
+  DEALER:          { colour: '#7C3AED', label: 'Existing dealer', radius: 10 },
+  HIGHLY_RELEVANT: { colour: '#0F9D6E', label: '🔥 Highly relevant', radius: 9 },
+  RELEVANT:        { colour: '#14A38B', label: '✅ Relevant', radius: 8 },
+  POSSIBLE:        { colour: '#D9A02B', label: '🟡 Possible', radius: 7 },
+  LOW_RELEVANCE:   { colour: '#8A9199', label: '⚪ Low relevance', radius: 6 },
+  NOT_PROSPECT:    { colour: '#E11D48', label: '❌ Not a dealer prospect', radius: 5 },
+  EXCLUDED:        { colour: '#9F1239', label: 'Excluded', radius: 6 },
 };
 
 function categorise(point: MapPoint): Category {
   if (point.crmStatus === 'DEALER') return 'DEALER';
   if (point.isExcluded) return 'EXCLUDED';
-  if (point.priority === 'A') return 'A';
-  if (point.priority === 'B') return 'B';
-  if (point.priority === 'C') return 'C';
-  return 'OTHER';
+  if (!point.isDealerProspect || point.commercialRelevance === 'IRRELEVANT') return 'NOT_PROSPECT';
+  if (point.commercialRelevance === 'HIGHLY_RELEVANT') return 'HIGHLY_RELEVANT';
+  if (point.commercialRelevance === 'RELEVANT') return 'RELEVANT';
+  if (point.commercialRelevance === 'POSSIBLE') return 'POSSIBLE';
+  return 'LOW_RELEVANCE';
 }
 
 export function ProspectMap({ points }: { points: MapPoint[] }) {
@@ -51,7 +63,8 @@ export function ProspectMap({ points }: { points: MapPoint[] }) {
   const mapRef = useRef<LeafletMap | null>(null);
   const layerRef = useRef<LayerGroup | null>(null);
   const [selected, setSelected] = useState<MapPoint | null>(null);
-  const [hidden, setHidden] = useState<Set<Category>>(new Set());
+  // Non-prospects start hidden, so the map opens on real opportunities.
+  const [hidden, setHidden] = useState<Set<Category>>(new Set(['NOT_PROSPECT', 'EXCLUDED']));
   const [ready, setReady] = useState(false);
 
   const visible = useMemo(
@@ -114,7 +127,7 @@ export function ProspectMap({ points }: { points: MapPoint[] }) {
           fillOpacity: 0.88,
         });
         marker.on('click', () => setSelected(point));
-        marker.bindTooltip(`${point.name} — ${point.score}`, { direction: 'top', offset: [0, -6] });
+        marker.bindTooltip(`${point.name} — dealer fit ${point.dealerFitScore}`, { direction: 'top', offset: [0, -6] });
         marker.addTo(layer);
         markers.push(marker);
       }
@@ -168,7 +181,9 @@ export function ProspectMap({ points }: { points: MapPoint[] }) {
         <Card>
           <div className="border-b border-sand-200 px-4 py-3">
             <h2 className="card-title">Legend</h2>
-            <p className="mt-0.5 text-2xs text-sand-400">Click a category to show or hide it</p>
+            <p className="mt-0.5 text-2xs text-sand-400">
+              Grouped by commercial relevance. Click a category to show or hide it.
+            </p>
           </div>
           <ul className="p-2">
             {(Object.keys(CATEGORY_STYLE) as Category[]).map((category) => {
@@ -209,8 +224,24 @@ export function ProspectMap({ points }: { points: MapPoint[] }) {
                 </p>
               </div>
 
+              {!selected.isDealerProspect ? (
+                <p className="rounded-md bg-rose-50 px-2.5 py-1.5 text-2xs font-semibold text-rose-800">
+                  NOT A DEALER PROSPECT
+                </p>
+              ) : null}
+
               <dl className="grid grid-cols-2 gap-3 text-[13px]">
-                <div><dt className="label">Score</dt><dd className="tnum font-semibold text-ink-900">{selected.score} ({selected.priority})</dd></div>
+                <div>
+                  <dt className="label">Dealer fit</dt>
+                  <dd className="tnum font-semibold text-ink-900">
+                    {selected.dealerFitScore} · {selected.commercialRelevance.replace(/_/g, ' ').toLowerCase()}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="label">Classification</dt>
+                  <dd className="text-ink-800">{selected.classification.replace(/_/g, ' ').toLowerCase()}</dd>
+                </div>
+                <div><dt className="label">Opp. score</dt><dd className="tnum font-semibold text-ink-900">{selected.score} ({selected.priority})</dd></div>
                 <div><dt className="label">Status</dt><dd className="text-ink-800">{selected.crmStatus.replace(/_/g, ' ')}</dd></div>
                 <div>
                   <dt className="label">Rating</dt>

@@ -2,7 +2,9 @@ import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { PageHeader } from '@/components/layout/PageHeader';
 import {
-  Banner, Card, CardHeader, CrmBadge, EmptyState, PriorityBadge, ScoreCell, Stat, Value,
+  Banner, Card, CardHeader, ClassificationBadge, CrmBadge, DealerFitCell, EmptyState,
+  PriorityBadge, RelevanceBadge, ScoreCell, Stat, Value,
+  RELEVANCE_META, RELEVANCE_ORDER,
 } from '@/components/ui/primitives';
 import { integrationStatuses } from '@/lib/env';
 import { phaseLabel } from '@/lib/pipeline/runner';
@@ -75,7 +77,7 @@ export default async function DashboardPage() {
 }
 
 async function loadDashboard() {
-  const [total, excluded, byPriority, byStatus, byCountry, withContacts, avg, recentRuns, topProspects, followUps] =
+  const [total, excluded, byPriority, byStatus, byCountry, withContacts, byRelevance, notProspects, unclassified, avg, recentRuns, topProspects, followUps] =
     await Promise.all([
       prisma.company.count({ where: { isExcluded: false } }),
       prisma.company.count({ where: { isExcluded: true } }),
@@ -87,15 +89,21 @@ async function loadDashboard() {
         where: { isExcluded: false },
       }),
       prisma.company.count({ where: { isExcluded: false, decisionMakers: { some: {} } } }),
+      prisma.company.groupBy({ by: ['commercialRelevance'], _count: { _all: true }, where: { isExcluded: false } }),
+      prisma.company.count({ where: { isExcluded: false, isDealerProspect: false } }),
+      prisma.company.count({ where: { isExcluded: false, classifiedAt: null } }),
       prisma.company.aggregate({ where: { isExcluded: false }, _avg: { score: true, dataCompleteness: true } }),
       prisma.searchRun.findMany({ orderBy: { startedAt: 'desc' }, take: 5 }),
       prisma.company.findMany({
-        where: { isExcluded: false },
-        orderBy: [{ score: 'desc' }, { googleReviewCount: 'desc' }],
+        // Ranked by DEALER FIT among real prospects: the dashboard should lead
+        // with who could actually resell, not who merely looks impressive.
+        where: { isExcluded: false, isDealerProspect: true },
+        orderBy: [{ dealerFitScore: 'desc' }, { score: 'desc' }],
         take: 8,
         select: {
           id: true, name: true, city: true, countryName: true, score: true, priority: true,
           googleRating: true, googleReviewCount: true, competitorBrands: true, crmStatus: true,
+          dealerFitScore: true, commercialRelevance: true, classification: true,
         },
       }),
       prisma.company.findMany({
@@ -109,8 +117,11 @@ async function loadDashboard() {
   const priorities = { A: 0, B: 0, C: 0, D: 0 };
   for (const row of byPriority) priorities[row.priority] = row._count._all;
 
+  const relevance: Record<string, number> = {};
+  for (const row of byRelevance) relevance[row.commercialRelevance] = row._count._all;
+
   return {
-    total, excluded, priorities, withContacts,
+    total, excluded, priorities, withContacts, relevance, notProspects, unclassified,
     statuses: byStatus.sort((a, b) => b._count._all - a._count._all),
     countries: byCountry.sort((a, b) => b._count._all - a._count._all).slice(0, 8),
     averageScore: avg._avg.score !== null ? Math.round(avg._avg.score) : null,
@@ -135,31 +146,96 @@ function DashboardBody({ data }: { data: Awaited<ReturnType<typeof loadDashboard
   return (
     <>
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
-        <Stat label="Prospects" value={data.total} sub={`${data.excluded} excluded`} />
-        <Stat label="Priority A" value={data.priorities.A} sub="High priority" accent="a" />
-        <Stat label="Priority B" value={data.priorities.B} sub="Good prospect" accent="b" />
-        <Stat label="Priority C" value={data.priorities.C} sub="Secondary" accent="c" />
-        <Stat label="With contacts" value={data.withContacts} sub="Decision maker found" />
+        <Stat label="Companies" value={data.total} sub={`${data.excluded} excluded`} />
         <Stat
-          label="Avg. score"
-          value={data.averageScore ?? '—'}
-          sub={data.averageCompleteness !== null ? `${data.averageCompleteness}% data completeness` : undefined}
+          label="Highly relevant"
+          value={data.relevance.HIGHLY_RELEVANT ?? 0}
+          sub="Realistic dealers"
+          accent="a"
         />
+        <Stat
+          label="Relevant"
+          value={data.relevance.RELEVANT ?? 0}
+          sub="Good dealer fit"
+          accent="b"
+        />
+        <Stat
+          label="Possible"
+          value={data.relevance.POSSIBLE ?? 0}
+          sub="Worth qualifying"
+          accent="c"
+        />
+        <Stat
+          label="Not dealer prospects"
+          value={data.notProspects}
+          sub="Service businesses, hidden by default"
+          accent="d"
+        />
+        <Stat label="With contacts" value={data.withContacts} sub="Decision maker found" />
       </div>
+
+      {data.unclassified > 0 ? (
+        <Banner tone="info" title={`${data.unclassified} company/companies have not been classified yet`}>
+          <p>
+            Dealer relevance is computed by the classifier. Run{' '}
+            <code className="rounded bg-white/60 px-1">npm run db:reclassify</code> (or POST to{' '}
+            <code className="rounded bg-white/60 px-1">/api/relevance/reclassify</code> with an admin
+            token) to classify them. It never deletes companies and never changes CRM status.
+          </p>
+        </Banner>
+      ) : null}
+
+      <Card>
+        <CardHeader
+          title="Commercial relevance"
+          subtitle="How many discovered companies could realistically resell Aquavia spas"
+        />
+        <div className="space-y-2.5 px-4 py-4">
+          {RELEVANCE_ORDER.map((key) => {
+            const count = data.relevance[key] ?? 0;
+            const pct = data.total > 0 ? Math.round((count / data.total) * 100) : 0;
+            const meta = RELEVANCE_META[key];
+            return (
+              <div key={key} className="flex items-center gap-3">
+                <span className="w-40 shrink-0 text-[13px] text-ink-800">
+                  <span aria-hidden className="mr-1.5">{meta.emoji}</span>
+                  {meta.label}
+                </span>
+                <span className="h-2 flex-1 overflow-hidden rounded-full bg-sand-200">
+                  <span
+                    className={`block h-full rounded-full ${
+                      key === 'HIGHLY_RELEVANT' ? 'bg-emerald-500'
+                      : key === 'RELEVANT' ? 'bg-teal-500'
+                      : key === 'POSSIBLE' ? 'bg-amber-500'
+                      : key === 'LOW_RELEVANCE' ? 'bg-sand-400'
+                      : 'bg-rose-400'
+                    }`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </span>
+                <span className="tnum w-16 shrink-0 text-right text-[13px] font-semibold text-ink-900">
+                  {count}
+                  <span className="ml-1 text-2xs font-normal text-sand-400">{pct}%</span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
 
       <div className="grid gap-5 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader
-            title="Top prospects"
-            subtitle="Highest Aquavia opportunity score across all markets"
+            title="Top dealer prospects"
+            subtitle="Ranked by dealer fit — how likely each company is to resell Aquavia spas"
             actions={<Link href="/companies" className="btn-ghost btn-sm">View all</Link>}
           />
           <div className="overflow-x-auto">
             <table className="table-dense w-full">
               <thead>
                 <tr>
-                  <th>Company</th><th>City</th><th>Score</th><th>Rating</th>
-                  <th>Competitor brands</th><th>Status</th>
+                  <th>Company</th><th>City</th><th>Dealer fit</th><th>Relevance</th>
+                  <th>Classification</th><th>Opp. score</th><th>Competitor brands</th>
                 </tr>
               </thead>
               <tbody>
@@ -172,18 +248,13 @@ function DashboardBody({ data }: { data: Awaited<ReturnType<typeof loadDashboard
                       <p className="text-2xs text-sand-400">{c.countryName}</p>
                     </td>
                     <td className="text-ink-700"><Value>{c.city}</Value></td>
+                    <td><DealerFitCell score={c.dealerFitScore} /></td>
+                    <td><RelevanceBadge relevance={c.commercialRelevance} /></td>
+                    <td><ClassificationBadge classification={c.classification} /></td>
                     <td><ScoreCell score={c.score} priority={c.priority} /></td>
-                    <td className="tnum text-ink-700">
-                      <Value>
-                        {c.googleRating !== null
-                          ? `${c.googleRating.toFixed(1)} (${c.googleReviewCount ?? 0})`
-                          : null}
-                      </Value>
-                    </td>
-                    <td className="max-w-[16rem] truncate text-ink-700">
+                    <td className="max-w-[14rem] truncate text-ink-700">
                       <Value>{c.competitorBrands.length > 0 ? c.competitorBrands.join(', ') : null}</Value>
                     </td>
-                    <td><CrmBadge status={c.crmStatus} /></td>
                   </tr>
                 ))}
               </tbody>

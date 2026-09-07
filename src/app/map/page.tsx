@@ -12,6 +12,7 @@ export default async function MapPage() {
       id: true, name: true, city: true, countryName: true, latitude: true, longitude: true,
       score: true, priority: true, crmStatus: true, isExcluded: true, googleRating: true,
       googleReviewCount: true, phone: true, website: true, competitorBrands: true, showroom: true,
+      dealerFitScore: true, commercialRelevance: true, classification: true, isDealerProspect: true,
     },
     take: 5000,
   });
@@ -26,7 +27,10 @@ export default async function MapPage() {
     <>
       <PageHeader
         title="Map"
-        description={`${points.length} prospect(s) with verified coordinates. Priority A, B, C, existing dealers and excluded companies are shown separately.`}
+        description={
+          `${points.length} company/companies with verified coordinates, grouped by commercial relevance. ` +
+          'Service businesses flagged NOT A DEALER PROSPECT are hidden until you enable them in the legend.'
+        }
       />
       <div className="p-6">
         <MapClient points={points} />

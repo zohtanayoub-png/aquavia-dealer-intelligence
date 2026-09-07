@@ -15,6 +15,8 @@ export const UNKNOWN = 'UNKNOWN';
 function s(v: string | null | undefined): string {
   return v === null || v === undefined || v === '' ? UNKNOWN : v;
 }
+/** Alias used by the dealer-relevance columns for readability. */
+const s2 = s;
 function n(v: number | null | undefined): string {
   return v === null || v === undefined ? UNKNOWN : String(v);
 }
@@ -38,6 +40,36 @@ export interface Column {
   header: string;
   width: number;
   value: (c: ExportCompany) => string;
+}
+
+const CLASSIFICATION_LABELS: Record<string, string> = {
+  HOT_TUB_SPA_RETAILER: 'Hot tub / spa retailer',
+  POOL_AND_SPA_COMPANY: 'Pool & spa company',
+  POOL_COMPANY: 'Pool company',
+  WELLNESS_EQUIPMENT: 'Wellness equipment',
+  SAUNA_HAMMAM_EQUIPMENT: 'Sauna / hammam equipment',
+  OUTDOOR_LIVING: 'Outdoor living',
+  HOTEL_HOSPITALITY_SUPPLIER: 'Hotel / hospitality supplier',
+  CONSTRUCTION_LANDSCAPE_RELEVANT: 'Construction / landscape',
+  MASSAGE_DAY_SPA: 'Massage / day spa',
+  BEAUTY_AESTHETICS: 'Beauty / aesthetics',
+  HOTEL_SPA_ONLY: 'Hotel spa only',
+  HAMMAM_SERVICE_ONLY: 'Hammam service only',
+  IRRELEVANT: 'Irrelevant',
+  UNKNOWN: UNKNOWN,
+};
+
+const RELEVANCE_LABELS: Record<string, string> = {
+  HIGHLY_RELEVANT: 'Highly relevant',
+  RELEVANT: 'Relevant',
+  POSSIBLE: 'Possible',
+  LOW_RELEVANCE: 'Low relevance',
+  IRRELEVANT: 'Irrelevant',
+};
+
+/** Count signals stored as JSON without trusting their shape. */
+function signalCount(value: unknown): string {
+  return Array.isArray(value) ? String(value.length) : UNKNOWN;
 }
 
 /** The full prospect export — every stored field. */
@@ -72,6 +104,17 @@ export const FULL_COLUMNS: Column[] = [
   { header: 'LinkedIn', width: 30, value: (c) => s(c.linkedinUrl) },
   { header: 'Instagram', width: 30, value: (c) => s(c.instagramUrl) },
   { header: 'Facebook', width: 30, value: (c) => s(c.facebookUrl) },
+  { header: 'Dealer Fit Score', width: 16, value: (c) => String(c.dealerFitScore) },
+  { header: 'Commercial Relevance', width: 20, value: (c) => RELEVANCE_LABELS[c.commercialRelevance] ?? c.commercialRelevance },
+  { header: 'Business Classification', width: 26, value: (c) => CLASSIFICATION_LABELS[c.classification] ?? c.classification },
+  { header: 'Classification Confidence', width: 22, value: (c) => c.classificationConfidence },
+  { header: 'Is Dealer Prospect', width: 18, value: (c) => (c.isDealerProspect ? 'YES' : 'NO') },
+  { header: 'Not A Dealer Prospect Reason', width: 60, value: (c) => s2(c.notDealerProspectReason) },
+  { header: 'Why This Could Be A Dealer', width: 70, value: (c) => s2(c.whyDealer) },
+  { header: 'Why This May Not Be A Dealer', width: 70, value: (c) => s2(c.whyNotDealer) },
+  { header: 'Positive Signals', width: 16, value: (c) => signalCount(c.positiveSignals) },
+  { header: 'Negative Signals', width: 16, value: (c) => signalCount(c.negativeSignals) },
+  { header: 'Product Evidence Items', width: 20, value: (c) => signalCount(c.productEvidence) },
   { header: 'Aquavia Score', width: 13, value: (c) => String(c.score) },
   { header: 'Priority', width: 10, value: (c) => c.priority },
   { header: 'Priority Label', width: 17, value: (c) => PRIORITY_LABELS[c.priority] },
@@ -114,6 +157,9 @@ export const GOOGLE_MY_MAPS_COLUMNS: Column[] = [
   { header: 'Address', width: 42, value: (c) => s(c.fullAddress) },
   { header: 'Latitude', width: 12, value: (c) => n(c.latitude) },
   { header: 'Longitude', width: 12, value: (c) => n(c.longitude) },
+  { header: 'Dealer Fit', width: 11, value: (c) => String(c.dealerFitScore) },
+  { header: 'Relevance', width: 16, value: (c) => RELEVANCE_LABELS[c.commercialRelevance] ?? c.commercialRelevance },
+  { header: 'Classification', width: 26, value: (c) => CLASSIFICATION_LABELS[c.classification] ?? c.classification },
   { header: 'Score', width: 8, value: (c) => String(c.score) },
   { header: 'Priority', width: 9, value: (c) => c.priority },
   { header: 'Rating', width: 8, value: (c) => n(c.googleRating) },
@@ -134,6 +180,9 @@ export const GOOGLE_MY_MAPS_COLUMNS: Column[] = [
     width: 60,
     value: (c) =>
       [
+        `Dealer fit ${c.dealerFitScore} — ${RELEVANCE_LABELS[c.commercialRelevance] ?? c.commercialRelevance}`,
+        `Classified as ${CLASSIFICATION_LABELS[c.classification] ?? c.classification}`,
+        c.isDealerProspect ? null : 'NOT A DEALER PROSPECT',
         `Aquavia score ${c.score} (${PRIORITY_LABELS[c.priority]})`,
         `Next action: ${c.recommendedAction}`,
         c.showroom === 'YES' ? 'Showroom: YES' : `Showroom: ${c.showroom}`,
