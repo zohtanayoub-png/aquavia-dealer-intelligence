@@ -85,6 +85,23 @@ enum BusinessClassification {
   UNKNOWN
 }
 
+/// Strength of evidence that the company sells PHYSICAL spa/pool products.
+/// Ordered strongest to weakest.
+enum ProductEvidenceLevel {
+  /// Product evidence on the company's OWN website, or a manufacturer dealer
+  /// locator naming them. The strongest claim we can make.
+  VERIFIED_PRODUCT
+  /// Unambiguous product wording on a third-party page that also names the
+  /// company, so the evidence is attributable to them.
+  STRONG_PRODUCT
+  /// Only the ambiguous word "spa"/"wellness"/"hammam", or product wording on
+  /// pages we cannot attribute to this company. Proves nothing.
+  WEAK_AMBIGUOUS
+  /// Positive evidence this is a treatment/service business.
+  SERVICE_ONLY
+  NO_EVIDENCE
+}
+
 /// How commercially relevant this company is as an Aquavia dealer prospect.
 enum CommercialRelevance {
   HIGHLY_RELEVANT
@@ -281,6 +298,17 @@ model Company {
   whyDealer    String?
   whyNotDealer String?
 
+  /// True only when physical product sales are actually evidenced.
+  physicalProductEvidence    Boolean              @default(false)
+  productEvidenceLevel       ProductEvidenceLevel @default(NO_EVIDENCE)
+  /// Verbatim quote behind the strongest product claim.
+  productEvidenceQuote       String?
+  productEvidenceSource      String?
+  /// False when a competitor brand was only inferred from the company NAME.
+  competitorEvidenceVerified Boolean              @default(false)
+  /// Confidence in the commercial relevance verdict specifically.
+  relevanceConfidence        Confidence           @default(UNKNOWN)
+
   classifiedAt        DateTime?
   /// Which enrichment stage produced the current classification (1, 2 or 3).
   classificationStage Int?
@@ -320,6 +348,7 @@ model Company {
   @@index([commercialRelevance, dealerFitScore])
   @@index([classification])
   @@index([isDealerProspect])
+  @@index([productEvidenceLevel])
 }
 
 // ---------------------------------------------------------------------------

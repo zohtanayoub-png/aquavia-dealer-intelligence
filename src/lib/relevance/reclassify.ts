@@ -40,8 +40,19 @@ export interface ReclassifyReport {
   byRelevance: Record<string, number>;
   byClassification: Record<string, number>;
   notDealerProspects: number;
-  topProspects: { id: string; name: string; city: string | null; dealerFitScore: number; classification: string; relevance: string }[];
-  demoted: { id: string; name: string; oldScore: number; dealerFitScore: number; classification: string; reason: string }[];
+  byProductEvidence: Record<string, number>;
+  verifiedProductCount: number;
+  strongProductCount: number;
+  downgradedForAmbiguousSpa: number;
+  topProspects: {
+    id: string; name: string; city: string | null; dealerFitScore: number;
+    classification: string; relevance: string; productEvidenceLevel: string;
+    competitorBrands: string[]; competitorEvidenceVerified: boolean; whyDealer: string;
+  }[];
+  demoted: {
+    id: string; name: string; oldScore: number; oldClassification: string;
+    dealerFitScore: number; classification: string; reason: string;
+  }[];
 }
 
 type CompanyWithRelations = Prisma.CompanyGetPayload<{
@@ -55,6 +66,7 @@ function toClassifyInput(company: CompanyWithRelations): ClassifyInput {
     googleTypes: company.googleTypes,
     sources: company.sources.map((s) => ({ url: s.url, title: s.title, snippet: s.snippet })),
     website: company.website,
+    websiteDomain: company.websiteDomain,
     spaActivity: company.spaActivity,
     poolActivity: company.poolActivity,
     saunaActivity: company.saunaActivity,
@@ -102,6 +114,12 @@ async function persist(
       brandEvidence: buildBrandEvidence(company) as unknown as object,
       whyDealer: result.whyDealer,
       whyNotDealer: result.whyNotDealer,
+      physicalProductEvidence: result.physicalProductEvidence,
+      productEvidenceLevel: result.productEvidenceLevel,
+      productEvidenceQuote: result.productEvidenceQuote,
+      productEvidenceSource: result.productEvidenceSource,
+      competitorEvidenceVerified: result.competitorEvidenceVerified,
+      relevanceConfidence: result.relevanceConfidence,
       classifiedAt: new Date(),
       classificationStage: stage,
       // CRM status, sales notes, follow-up dates and `score` are deliberately
@@ -131,19 +149,39 @@ function buildBrandEvidence(company: CompanyWithRelations) {
  * Stage 2 asks the cheap question ("what do they actually sell?");
  * stage 3 digs into brands and dealer status.
  */
-async function enrich(company: CompanyWithRelations, stage: 2 | 3): Promise<number> {
+interface EnrichOutcome {
+  calls: number;
+  /** Fetched excerpts. In a dry run these are returned instead of persisted. */
+  sources: { url: string; title: string | null; snippet: string }[];
+}
+
+async function enrich(
+  company: CompanyWithRelations,
+  stage: 2 | 3,
+  persistSources: boolean,
+): Promise<EnrichOutcome> {
   const provider = getWebResearchProvider();
-  if (!provider.isConfigured()) return 0;
+  if (!provider.isConfigured()) return { calls: 0, sources: [] };
 
   const where = [company.city, company.countryName].filter(Boolean).join(' ');
+  // NOTE ON QUERY DESIGN
+  // The original enrichment query was "{company} {city} spa jacuzzi hot tub
+  // brands", which guaranteed that every returned page contained those words —
+  // and the classifier then read them back as evidence. These queries lead with
+  // the company's own identity so results are ABOUT the company, and product
+  // wording is only used to steer, never to fabricate. Attribution checks in
+  // the classifier are the real safeguard.
+  const site = company.websiteDomain ? `site:${company.websiteDomain} ` : '';
   const queries = stage === 2
-    ? [`${company.name} ${where} vente spa jacuzzi piscine produits`]
+    ? [`${site}${company.name} ${where}`.trim()]
     : [
-        `${company.name} ${where} distributeur officiel marque spa`,
-        `${company.name} ${where} showroom exposition spa piscine`,
+        `"${company.name}" ${where} distributeur officiel revendeur`,
+        `"${company.name}" ${where} catalogue produits showroom`,
       ];
 
   let calls = 0;
+  const fetched: EnrichOutcome['sources'] = [];
+
   for (const query of queries) {
     const outcome = await provider.search({
       query, maxResults: stage === 2 ? 4 : 6,
@@ -153,15 +191,22 @@ async function enrich(company: CompanyWithRelations, stage: 2 | 3): Promise<numb
     calls += 1;
     if (!outcome.ok) break;
 
-    await addSourceRefs(
-      company.id,
-      outcome.data.map((r) => ({
-        url: r.url, title: r.title, snippet: r.content,
-        kind: 'CLASSIFICATION' as const, provider: 'TAVILY' as const,
-      })),
-    );
+    for (const r of outcome.data) {
+      fetched.push({ url: r.url, title: r.title, snippet: r.content });
+    }
+
+    // A dry run may still research — it just must not write anything.
+    if (persistSources) {
+      await addSourceRefs(
+        company.id,
+        outcome.data.map((r) => ({
+          url: r.url, title: r.title, snippet: r.content,
+          kind: 'CLASSIFICATION' as const, provider: 'TAVILY' as const,
+        })),
+      );
+    }
   }
-  return calls;
+  return { calls, sources: fetched };
 }
 
 export async function reclassifyAll(options: ReclassifyOptions = {}): Promise<ReclassifyReport> {
@@ -175,6 +220,8 @@ export async function reclassifyAll(options: ReclassifyOptions = {}): Promise<Re
   const report: ReclassifyReport = {
     total: companies.length, updated: 0, skippedManualOverride: 0, tavilyCallsUsed: 0,
     byRelevance: {}, byClassification: {}, notDealerProspects: 0,
+    byProductEvidence: {}, verifiedProductCount: 0, strongProductCount: 0,
+    downgradedForAmbiguousSpa: 0,
     topProspects: [], demoted: [],
   };
 
@@ -186,36 +233,63 @@ export async function reclassifyAll(options: ReclassifyOptions = {}): Promise<Re
 
   // --- Decide who is worth paying for --------------------------------------
   // Strongest candidates first, so a budget cap spends on the best prospects.
+  // Spend Tavily where it can actually change a verdict: companies that look
+  // promising but whose product evidence is unproven. Never on a confirmed
+  // massage or beauty business — no amount of research makes those dealers.
   const enrichQueue = companies
     .filter((c) => {
       const r = stage1.get(c.id)!;
-      // Never spend research budget on a confirmed service business.
-      if (!r.isDealerProspect && r.confidence !== 'LOW' && r.confidence !== 'UNKNOWN') return false;
-      return r.needsEnrichment || r.dealerFitScore >= DEEP_RESEARCH_THRESHOLD;
+      if (r.enrichmentPriority === 'NONE') return false;
+      if (r.productEvidenceLevel === 'SERVICE_ONLY') return false;
+      // Already proven from the company's own site — nothing left to buy.
+      if (r.productEvidenceLevel === 'VERIFIED_PRODUCT') return false;
+      return (
+        r.enrichmentPriority === 'HIGH' ||
+        r.dealerFitScore >= DEEP_RESEARCH_THRESHOLD ||
+        r.needsEnrichment
+      );
     })
-    .sort((a, b) => stage1.get(b.id)!.dealerFitScore - stage1.get(a.id)!.dealerFitScore);
+    .sort((a, b) => {
+      const ra = stage1.get(a.id)!;
+      const rb = stage1.get(b.id)!;
+      // Unverified brand leads first — a single page can confirm a dealership.
+      const brandLead = (r: ClassificationResult) =>
+        r.competitorEvidenceVerified === false && r.dealerFitScore > 0 ? 1 : 0;
+      const byBrand = brandLead(rb) - brandLead(ra);
+      if (byBrand !== 0) return byBrand;
+      return rb.dealerFitScore - ra.dealerFitScore;
+    });
 
   const finalResults = new Map<string, { result: ClassificationResult; stage: number }>();
   for (const c of companies) finalResults.set(c.id, { result: stage1.get(c.id)!, stage: 1 });
 
-  if (allowTavily && !dryRun) {
+  if (allowTavily) {
     for (const company of enrichQueue) {
       if (report.tavilyCallsUsed >= maxTavilyCalls) break;
 
-      report.tavilyCallsUsed += await enrich(company, 2);
-      let refreshed = await prisma.company.findUniqueOrThrow({
-        where: { id: company.id }, include: { sources: true, decisionMakers: true },
-      });
-      let result = classifyFromStoredData(refreshed);
+      // In a dry run the fetched excerpts are classified in memory and thrown
+      // away, so the research still informs the report without touching a row.
+      const stage2 = await enrich(company, 2, !dryRun);
+      report.tavilyCallsUsed += stage2.calls;
+
+      let working: CompanyWithRelations = dryRun
+        ? withExtraSources(company, stage2.sources)
+        : await prisma.company.findUniqueOrThrow({
+            where: { id: company.id }, include: { sources: true, decisionMakers: true },
+          });
+      let result = classifyFromStoredData(working);
       let stage = 2;
 
       // Stage 3 only for candidates that now look genuinely promising.
       if (result.dealerFitScore >= DEEP_RESEARCH_THRESHOLD && report.tavilyCallsUsed < maxTavilyCalls) {
-        report.tavilyCallsUsed += await enrich(refreshed, 3);
-        refreshed = await prisma.company.findUniqueOrThrow({
-          where: { id: company.id }, include: { sources: true, decisionMakers: true },
-        });
-        result = classifyFromStoredData(refreshed);
+        const stage3 = await enrich(working, 3, !dryRun);
+        report.tavilyCallsUsed += stage3.calls;
+        working = dryRun
+          ? withExtraSources(working, stage3.sources)
+          : await prisma.company.findUniqueOrThrow({
+              where: { id: company.id }, include: { sources: true, decisionMakers: true },
+            });
+        result = classifyFromStoredData(working);
         stage = 3;
       }
       finalResults.set(company.id, { result, stage });
@@ -236,27 +310,69 @@ export async function reclassifyAll(options: ReclassifyOptions = {}): Promise<Re
     report.byRelevance[relevance] = (report.byRelevance[relevance] ?? 0) + 1;
     report.byClassification[result.classification] = (report.byClassification[result.classification] ?? 0) + 1;
     if (!result.isDealerProspect) report.notDealerProspects += 1;
+    report.byProductEvidence[result.productEvidenceLevel] =
+      (report.byProductEvidence[result.productEvidenceLevel] ?? 0) + 1;
+    if (result.productEvidenceLevel === 'VERIFIED_PRODUCT') report.verifiedProductCount += 1;
+    if (result.productEvidenceLevel === 'STRONG_PRODUCT') report.strongProductCount += 1;
+    if (result.downgradedForAmbiguousSpa) report.downgradedForAmbiguousSpa += 1;
 
     report.topProspects.push({
       id: company.id, name: company.name, city: company.city,
       dealerFitScore: result.dealerFitScore,
       classification: result.classification, relevance,
+      productEvidenceLevel: result.productEvidenceLevel,
+      competitorBrands: company.competitorBrands,
+      competitorEvidenceVerified: result.competitorEvidenceVerified,
+      whyDealer: result.whyDealer,
     });
 
     // Companies the general score flattered but that are not dealers at all.
-    if (!result.isDealerProspect && company.score >= result.dealerFitScore) {
+    // Anything the previous pass rated far more highly than the evidence now
+    // supports — service businesses AND over-promoted ambiguous "spa" names.
+    const wasOverRated =
+      company.dealerFitScore - result.dealerFitScore >= 20 ||
+      (company.classification === 'HOT_TUB_SPA_RETAILER' && result.classification !== 'HOT_TUB_SPA_RETAILER') ||
+      (!result.isDealerProspect && company.score >= result.dealerFitScore);
+    if (wasOverRated) {
       report.demoted.push({
-        id: company.id, name: company.name, oldScore: company.score,
+        id: company.id, name: company.name,
+        oldScore: company.dealerFitScore > 0 ? company.dealerFitScore : company.score,
+        oldClassification: company.classification,
         dealerFitScore: result.dealerFitScore, classification: result.classification,
-        reason: result.notDealerProspectReason ?? 'Not a dealer prospect.',
+        reason: result.notDealerProspectReason ?? result.capApplied ?? 'Evidence does not support the previous rating.',
       });
     }
   }
 
   report.topProspects.sort((a, b) => b.dealerFitScore - a.dealerFitScore);
-  report.demoted.sort((a, b) => b.oldScore - a.oldScore);
+  report.demoted.sort((a, b) => (b.oldScore - b.dealerFitScore) - (a.oldScore - a.dealerFitScore));
 
   return report;
+}
+
+/** Attach freshly fetched excerpts WITHOUT persisting them (dry runs). */
+function withExtraSources(
+  company: CompanyWithRelations,
+  extra: { url: string; title: string | null; snippet: string }[],
+): CompanyWithRelations {
+  if (extra.length === 0) return company;
+  const now = new Date();
+  return {
+    ...company,
+    sources: [
+      ...company.sources,
+      ...extra.map((e, i) => ({
+        id: `dryrun-${company.id}-${i}`,
+        companyId: company.id,
+        url: e.url,
+        title: e.title,
+        snippet: e.snippet,
+        kind: 'CLASSIFICATION' as const,
+        provider: 'TAVILY' as const,
+        retrievedAt: now,
+      })),
+    ],
+  };
 }
 
 /** Classify a single company from stored data. Used after every search. */

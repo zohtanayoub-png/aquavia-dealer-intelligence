@@ -19,6 +19,8 @@
  * brand being represented.
  */
 
+import { ALL_BRANDS } from '@/lib/discovery/brands';
+
 export type Lang = 'en' | 'fr' | 'ar' | 'es' | 'pt' | 'it' | 'de' | 'nl' | 'pl' | 'tr';
 
 export interface Term {
@@ -284,4 +286,105 @@ function quoteAround(text: string, phrase: string, radius = 110): string {
   const start = Math.max(0, Math.min(idx - radius, text.length - 1));
   const end = Math.min(text.length, idx + phrase.length + radius);
   return `${start > 0 ? '…' : ''}${text.slice(start, end).trim()}${end < text.length ? '…' : ''}`;
+}
+
+// ---------------------------------------------------------------------------
+// AMBIGUOUS terms — present in BOTH a hot tub retailer and a massage salon
+// ---------------------------------------------------------------------------
+
+/**
+ * These words prove nothing on their own and must never establish relevance.
+ *
+ * The first Morocco dry-run classified 35 of 69 companies as hot tub retailers
+ * largely on wording like this. Worse, the enrichment query itself was
+ * "{company} {city} spa jacuzzi hot tub brands", so the pages it returned were
+ * guaranteed to contain those words whether or not the company sells anything.
+ * Evidence retrieved by a query is contaminated by that query.
+ */
+export const AMBIGUOUS_SPA_TERMS: Term[] = [
+  ...['spa', 'spas', 'wellness', 'relaxation', 'hammam', 'spa center', 'spa centre',
+      'spa resort', 'spa services', 'thermal', 'balneo'].map(t('en', 'weak')),
+  ...['spa', 'spas', 'bien etre', 'detente', 'hammam', 'centre spa', 'espace spa',
+      'espace bien etre', 'thermes'].map(t('fr', 'weak')),
+  ...['سبا', 'حمام', 'استرخاء', 'عافية'].map(t('ar', 'weak')),
+];
+
+/**
+ * Manufacturer dealer-locator / official-distribution wording.
+ * The strongest single proof that a company resells a spa brand.
+ */
+export const DEALER_LOCATOR_TERMS: Term[] = [
+  ...['dealer locator', 'find a dealer', 'find a retailer', 'authorised dealer',
+      'authorized dealer', 'official dealer', 'official distributor',
+      'exclusive distributor', 'our dealers', 'where to buy'].map(t('en', 'strong')),
+  ...['distributeur officiel', 'revendeur officiel', 'distributeur exclusif',
+      'nos revendeurs', 'ou acheter', 'importateur officiel',
+      'concessionnaire officiel'].map(t('fr', 'strong')),
+  ...['موزع معتمد', 'وكيل معتمد', 'الموزع الرسمي', 'أين تشتري'].map(t('ar', 'strong')),
+];
+
+/** Catalogue / model-listing wording — a shop selling physical units. */
+export const CATALOGUE_TERMS: Term[] = [
+  ...['product catalogue', 'product catalog', 'our models', 'spa models',
+      'hot tub models', 'technical specifications', 'seats', 'jets',
+      'add to cart', 'in stock', 'price list'].map(t('en', 'strong')),
+  ...['catalogue produits', 'nos modeles', 'modeles de spa', 'fiche technique',
+      'nombre de places', 'buses de massage', 'ajouter au panier',
+      'en stock', 'liste de prix', 'nos gammes'].map(t('fr', 'strong')),
+  ...['كتالوج المنتجات', 'موديلات', 'المواصفات التقنية'].map(t('ar', 'strong')),
+];
+
+/** Registrable domain of a URL, lowercase, no www. Null when unusable. */
+export function domainOf(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const candidate = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+  try {
+    const host = new URL(candidate).hostname.toLowerCase();
+    return host.startsWith('www.') ? host.slice(4) : host;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Brand words can never attribute a page to a company.
+ *
+ * "Wellis Maroc" would otherwise match ANY page mentioning Wellis — including
+ * the manufacturer's own site and every directory listing — and so appear to
+ * have third-party confirmation of a dealership it may not hold. A company
+ * named after a brand must be confirmed by something other than that brand.
+ */
+const BRAND_NAME_TOKENS = new Set(
+  ALL_BRANDS.flatMap((b) => [b.name, ...b.aliases])
+    .flatMap((value) => normalizeForMatch(value).split(' '))
+    .filter((token) => token.length >= 3),
+);
+
+/** Generic words that do not identify a specific company. */
+const GENERIC_NAME_TOKENS = new Set([
+  'spa', 'spas', 'wellness', 'maroc', 'morocco', 'casablanca', 'rabat', 'marrakech',
+  'tanger', 'agadir', 'fes', 'meknes', 'oujda', 'sarl', 'sa', 'sas', 'group', 'groupe',
+  'societe', 'company', 'center', 'centre', 'the', 'and', 'les', 'des', 'del',
+  'piscine', 'piscines', 'pool', 'pools', 'jacuzzi', 'hammam', 'beaute', 'beauty',
+]);
+
+/**
+ * The distinctive tokens of a company name — what makes "Piscines Atlas"
+ * identifiable as Atlas rather than as any pool company.
+ */
+export function distinctiveNameTokens(name: string): string[] {
+  return normalizeForMatch(name)
+    .split(' ')
+    .filter((token) =>
+      token.length >= 4 &&
+      !GENERIC_NAME_TOKENS.has(token) &&
+      !BRAND_NAME_TOKENS.has(token));
+}
+
+/** Does this text plausibly talk about THIS company? */
+export function mentionsCompany(text: string, name: string): boolean {
+  const tokens = distinctiveNameTokens(name);
+  if (tokens.length === 0) return false;
+  const hay = normalizeForMatch(text);
+  return tokens.some((token) => hay.includes(token));
 }
